@@ -100,3 +100,14 @@ pending();let chessSteps=0;while(nodes.get('xq-count').textContent==='MOVE 1'&&c
 assert.equal(nodes.get('xq-count').textContent,'MOVE 2');nodes.get('xq-undo').onclick();assert.equal(nodes.get('xq-count').textContent,'MOVE 0');
 chessCells[54].onclick();chessCells[45].onclick();const oldChess=pending;nodes.get('tab-gomoku').onclick();oldChess();assert.equal(nodes.get('xq-count').textContent,'MOVE 1');nodes.get('tab-xiangqi').onclick();assert.ok(pending);nodes.get('xq-undo').onclick();assert.equal(nodes.get('xq-count').textContent,'MOVE 0');
 console.log('Passed: chess UI human/computer turns, undo, tabs pause stale search, and resume.');
+// Soccer participates in navigation without resetting either board or running hidden AI.
+let soccerActive=false;
+context.soccer={activate(value){soccerActive=value}};
+chessCells[54].onclick();chessCells[45].onclick();const beforeSoccer=pending;
+nodes.get('tab-soccer').onclick();assert.equal(soccerActive,true);assert.equal(nodes.get('soccer-main').hidden,false);assert.equal(nodes.get('xiangqi-main').hidden,true);
+beforeSoccer();assert.equal(nodes.get('xq-count').textContent,'MOVE 1','Hidden chess search remains canceled on Soccer');
+nodes.get('tab-xiangqi').onclick();assert.equal(soccerActive,false);assert.ok(pending,'Chess resumes its pending reply');nodes.get('xq-undo').onclick();
+nodes.get('tab-gomoku').onclick();vm.runInContext("newRound();godMod=false;mode='ai';difficulty='easy';place(112)",context);const beforeSoccerGomoku=pending;
+nodes.get('tab-soccer').onclick();beforeSoccerGomoku();assert.equal(nodes.get('move-count').textContent,'MOVE 01','Hidden Gomoku does not move');
+nodes.get('tab-gomoku').onclick();assert.ok(pending,'Gomoku resumes its pending reply');pending();assert.equal(nodes.get('move-count').textContent,'MOVE 02');
+console.log('Passed: Soccer tab activates and pauses, preserves both board games, cancels hidden AI, and resumes replies.');

@@ -44,4 +44,19 @@ const xq=(()=>{const E=XiangqiEngine,$=id=>document.getElementById(id),labels={r
  $('xq-undo').onclick=()=>{if(!history.length)return;cancel();let prev=history.pop();positions.pop();if(prev.side==='b'&&history.length){prev=history.pop();positions.pop();}board=prev.board;side=prev.side;quiet=prev.quiet;ended=false;selected=null;moves=[];render();};
  render();return {activate(value){active=value;if(!active)cancel();else if(side==='b'&&!ended)schedule();}};
 })();
-for(const game of ['gomoku','xiangqi'])document.getElementById('tab-'+game).onclick=()=>{const chess=game==='xiangqi';document.getElementById('gomoku-main').hidden=chess;document.getElementById('xiangqi-main').hidden=!chess;for(const id of ['gomoku','xiangqi']){const b=document.getElementById('tab-'+id);b.classList.toggle('selected',id===game);b.setAttribute('aria-selected',String(id===game));}if(chess){searchVersion++;clearTimeout(timer);timer=null;}else if(thinking&&!finished){scheduleComputer();}xq.activate(chess);document.title=chess?'Chinese chess — Offline games':'Five — Offline games';};
+// Keep each game mounted so its match survives navigation. Pause outgoing AI work.
+let activeGame='gomoku';
+for(const game of ['gomoku','xiangqi','soccer'])document.getElementById('tab-'+game).onclick=()=>{
+ if(activeGame===game)return;
+ activeGame=game;
+ for(const id of ['gomoku','xiangqi','soccer']){
+  document.getElementById(id+'-main').hidden=id!==game;
+  const b=document.getElementById('tab-'+id);
+  b.classList.toggle('selected',id===game);b.setAttribute('aria-selected',String(id===game));
+ }
+ if(game!=='gomoku'){searchVersion++;clearTimeout(timer);timer=null;}
+ xq.activate(game==='xiangqi');
+ if(game==='gomoku'&&thinking&&!finished)scheduleComputer();
+ globalThis.soccer?.activate(game==='soccer');
+ document.title=game==='soccer'?'Soccer — The Neighborhood Cup':game==='xiangqi'?'Chinese chess — Offline games':'Five — Offline games';
+};

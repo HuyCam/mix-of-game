@@ -32,3 +32,47 @@ Rules cover palace restrictions, flying generals, horse legs, elephant eyes and 
 
 Rule references: https://www.xiangqi.com/help/pieces-and-moves and https://www.xiangqi.com/help/board-and-set-up
 Run `node xiangqi-test.js` for rules and AI checks, and `node test.js` for both games' controller checks. Browser visual verification remains pending because the browser tool blocks local file URLs.
+
+## Soccer tab — The Neighborhood Cup
+
+Select **Soccer**, then **Kick off**. Play as Meadow (green), attacking right, against Terracotta. Each team has two outfield players and an automatic goalkeeper. Matches have two minutes of playing time; goal celebrations and pauses stop the clock. A level score at full time is a draw.
+
+- **WASD / arrow keys:** move. Diagonal movement is normalized.
+- **Space:** pass ahead of your teammate and automatically select the receiver.
+- **Hold J, then release:** charge and shoot. Directional input aims the shot; without it, aim defaults toward the opposing goal. Charging slows your player.
+- **K:** switch between your two outfield players. A bright ring and arrow identify the selected player.
+- **Shift:** sprint. The energy meter drains while sprinting and recovers afterward. Sprinting pushes the ball farther ahead, making it easier to steal.
+- **Esc / Pause:** pause or resume. Leaving the Soccer tab, switching browser tabs, or losing window focus pauses the match. Return and choose **Back to the pitch** to resume.
+- Touch screens have directional and action buttons. Hold the on-screen Shoot button to charge, then release it.
+
+Get beside an exposed ball to knock it loose. Fast shots can deflect off outfield players; keepers save nearby shots and pass back out. Boards rebound the ball into play. Goals require the whole ball to cross between the posts. No fouls, offsides, throw-ins, or corners. Easy, Medium, and Hard adjust the computer's speed, reaction time, and shot accuracy. Sound can be toggled during play. New match asks before clearing an unfinished match.
+
+The soccer game uses Phaser 3.90 for rendering and TypeScript for a custom, fixed-step simulation with substepped ball collisions. Players, pitch, and effects are drawn in code; sounds are synthesized locally. No asset services or backend are needed. The generated `soccer/soccer.bundle.js` includes Phaser and is deliberately included in the project so the entire collection still works by opening `index.html` directly, offline.
+
+### Soccer development
+
+Node.js 20.19+ (or 22.12+) is required for the development tooling.
+
+```sh
+cd soccer
+npm ci
+npm run dev
+```
+
+Open the local URL printed by Vite. It serves the entire game collection and loads soccer from TypeScript source. Reloading during development resets matches. To regenerate the offline bundle after editing soccer source:
+
+```sh
+npm run build
+npm test
+```
+
+The soccer tests cover movement, sprint energy, passes, shot power, stealing, goal-line rules, board rebounds, goalkeeper collisions and distribution, full-time freezing, and complete simulated matches on all difficulties. The root `node test.js` suite also checks navigation and preservation of pending board-game turns. Phaser's MIT license is included in `soccer/PHASER-LICENSE.txt`.
+
+### Soccer God mode
+
+Enable **God mode** in the soccer match panel to unlock two extra shots for your selected player while they have possession:
+
+- **H — Homing shot:** tap once to send the ball along an automatically replanned route around players and the goalkeeper toward the opposing goal. A blue glow and trail identify it. It tries to score; normal collisions still apply.
+- **N — Curve shot:** tap while holding a direction. Left/right chooses the destination side; up/down chooses the bow of the arc. Down-left bows down and travels left; up-left bows up and travels left. Without vertical input, the bend is chosen randomly. Without horizontal input, it travels right, toward the opponent's end. The gold trail follows an arc back toward horizontal travel. Curve shots can hit boards, be intercepted, or enter either goal.
+
+Touch controls include Homing H and Curve N buttons, disabled until God mode is enabled. J remains the ordinary charged shot. Turning God mode off immediately removes active shot steering without teleporting or stopping the ball. The toggle survives new matches and tab switches within this page session; special flights end on collisions, goals, full time, or restart.
