@@ -1,0 +1,22 @@
+# macOS metadata
+.DS_Store
+._*
+
+# Dependencies and generated builds
+node_modules/
+dist/
+build/
+.vite/
+coverage/
+*.tsbuildinfo
+
+# Local environment and logs
+.env
+.env.*
+!.env.example
+*.log
+
+# Editor files
+.idea/
+*.swp
+*.swo
