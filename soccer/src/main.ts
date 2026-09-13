@@ -6,12 +6,12 @@ const match = new Match();
 let active = false, paused = true, started = false, game: Phaser.Game | undefined;
 let muted = false, audio: AudioContext | undefined;
 let held = new Set<string>();
-let pending = { pass: false, shoot: false, switch: false, homing: false, curve: false };
+let pending = { pass: false, shoot: false, switch: false, homing: false, tackle: false };
 let accumulator = 0;
 let lastStatus = '';
 const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 const accepted = new Set(['KeyW', 'KeyA', 'KeyS', 'KeyD', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space', 'KeyJ', 'KeyK', 'KeyH', 'KeyN', 'ShiftLeft', 'ShiftRight', 'Escape']);
-function resetInput() { document.querySelectorAll('[data-soccer-key]').forEach(b => b.classList.remove('held')); held.clear(); pending = { pass: false, shoot: false, switch: false, homing: false, curve: false }; match.cancelCharge(); accumulator = 0; }
+function resetInput() { document.querySelectorAll('[data-soccer-key]').forEach(b => b.classList.remove('held')); held.clear(); pending = { pass: false, shoot: false, switch: false, homing: false, tackle: false }; match.cancelCharge(); accumulator = 0; }
 function sound(type: GameEvent['type'] | 'start') {
   if (muted || !audio) return;
   const notes = type === 'goal' ? [392, 494, 587, 784] : type === 'end' ? [587, 494, 392] : type === 'start' ? [740, 988] : type === 'save' ? [190, 260] : type === 'steal' ? [160] : [280];
@@ -38,7 +38,7 @@ function press(code: string) {
   if (code === 'Space') pending.pass = true;
   if (code === 'KeyK') pending.switch = true;
   if (code === 'KeyH' && match.godMode) pending.homing = true;
-  if (code === 'KeyN' && match.godMode) pending.curve = true;
+  if (code === 'KeyN' && match.godMode) pending.tackle = true;
 }
 function release(code: string) {
   if (code === 'KeyJ' && held.has(code) && !paused) pending.shoot = true;
@@ -97,7 +97,7 @@ class PitchScene extends Phaser.Scene {
   }
   handleEvent(event: GameEvent) {
     sound(event.type);
-    if (event.type === 'goal') { held.clear(); pending = { pass: false, shoot: false, switch: false, homing: false, curve: false }; }
+    if (event.type === 'goal') { held.clear(); pending = { pass: false, shoot: false, switch: false, homing: false, tackle: false }; }
     if (event.type === 'goal' && !reducedMotion) {
       for (let i = 0; i < 60; i++) this.sparks.push({ x: match.ball.x, y: match.ball.y, vx: (Math.random() - .5) * 470, vy: (Math.random() - .5) * 470, life: 1.3, color: event.team === 0 ? 0xd8f48a : 0xf6a087 });
     }
@@ -108,7 +108,7 @@ class PitchScene extends Phaser.Scene {
       accumulator += Math.min(delta / 1000, .1);
       while (accumulator >= 1 / 120) {
         match.step(1 / 120, input());
-        pending = { pass: false, shoot: false, switch: false, homing: false, curve: false };
+        pending = { pass: false, shoot: false, switch: false, homing: false, tackle: false };
         accumulator -= 1 / 120;
         match.events.forEach(event => this.handleEvent(event));
         if (match.phase === 'ended') { paused = true; resetInput(); break; }
@@ -123,12 +123,16 @@ class PitchScene extends Phaser.Scene {
   }
   draw() {
     const g = this.dynamic; g.clear();
-    this.ballTrail.forEach((p, i) => { g.fillStyle(match.specialShot?.kind === 'homing' ? 0x8de7fa : match.specialShot?.kind === 'curve' ? 0xf5c779 : 0xf0f1cf, Math.min(.5, i / 45)); g.fillCircle(p.x, p.y, 3 + i * .35); });
+    this.ballTrail.forEach((p, i) => { g.fillStyle(match.specialShot ? 0x8de7fa : 0xf0f1cf, Math.min(.5, i / 45)); g.fillCircle(p.x, p.y, 3 + i * .35); });
     const selected = match.players[match.selected];
     g.lineStyle(2.5, 0xe0f69e, 1); g.strokeEllipse(selected.x, selected.y + 7, 44, 32);
     g.fillStyle(0xe0f69e); g.fillTriangle(selected.x - 5, selected.y - 35, selected.x + 5, selected.y - 35, selected.x, selected.y - 28);
     // Render players in pitch-depth order; each body is built from flat polygon facets.
     for (const p of [...match.players].sort((a, b) => a.y - b.y)) {
+      if (p.stagger > 0) {
+        g.lineStyle(2, 0xf5c779, .9); g.strokeEllipse(p.x, p.y - 30, 30, 10);
+        for (let i = 0; i < 3; i++) { const angle = match.elapsed * 7 + i * Math.PI * 2 / 3; g.fillStyle(0xffe1a0); g.fillCircle(p.x + Math.cos(angle) * 15, p.y - 30 + Math.sin(angle) * 5, 2.5); }
+      }
       const speed = Math.hypot(p.vx, p.vy), stride = Math.sin(match.elapsed * 19 + p.id) * Math.min(speed / 45, 4);
       const shirt = p.keeper ? 0xecc878 : p.team === 0 ? 0xc7e888 : 0xec9279;
       const shade = p.keeper ? 0xc7994d : p.team === 0 ? 0x94ba67 : 0xc56554;
@@ -143,7 +147,7 @@ class PitchScene extends Phaser.Scene {
       this.marks[p.id].setPosition(p.x, p.y).setDepth(5 + p.y / 1000);
     }
     const b = match.ball;
-    if (match.specialShot) { g.lineStyle(2, match.specialShot.kind === 'homing' ? 0x8de7fa : 0xf5c779, .9); g.strokeCircle(b.x, b.y, 12); }
+    if (match.specialShot) { g.lineStyle(2, 0x8de7fa, .9); g.strokeCircle(b.x, b.y, 12); }
     g.fillStyle(0x142e23, .4); g.fillEllipse(b.x + 3, b.y + 6, 17, 9);
     g.fillStyle(0xf9f5de); g.fillCircle(b.x, b.y, 7);
     g.lineStyle(1, 0xc6d1b3); g.strokeCircle(b.x, b.y, 7);
@@ -181,7 +185,7 @@ function updateHud() {
   $('soccer-clock').classList.toggle('urgent', seconds <= 20);
   $('soccer-stamina').style.width = `${match.players[match.selected].stamina * 100}%`;
   $('soccer-player').textContent = `NO. ${match.selected === 1 ? '07' : '09'}`;
-  $('soccer-possession').textContent = match.specialShot ? match.specialShot.kind === 'homing' ? 'HOMING SHOT' : 'CURVE SHOT' : match.owner ? match.owner.team === 0 ? 'YOUR BALL' : 'THEIR BALL' : 'LOOSE BALL';
+  $('soccer-possession').textContent = match.specialShot ? 'HOMING SHOT' : match.owner ? match.owner.team === 0 ? 'YOUR BALL' : 'THEIR BALL' : 'LOOSE BALL';
   $('soccer-pause').textContent = paused ? 'Resume' : 'Pause';
   ($('soccer-pause') as HTMLButtonElement).disabled = !started || match.phase === 'ended';
   const overlay = $('soccer-overlay');
@@ -192,7 +196,7 @@ function updateHud() {
   $('soccer-overlay-title').textContent = !started ? 'A little pitch.\nA lot to play for.' : match.phase === 'ended' ? match.score[0] > match.score[1] ? 'That’s your win.' : match.score[0] < match.score[1] ? 'Their day. Your rematch?' : 'Nothing between you.' : goal ? match.kickoffTeam === 1 ? 'Get in! Your goal.' : 'They found the net.' : 'Match paused.';
   $('soccer-overlay-note').textContent = !started ? 'Two minutes. Three a side. Make your moment.' : match.phase === 'ended' ? `Meadow ${match.score[0]} — ${match.score[1]} Terracotta` : goal ? 'The conceding team takes the kickoff.' : 'Your match is right where you left it.';
   $('soccer-overlay-action').textContent = !started ? 'Kick off  ↗' : match.phase === 'ended' ? 'Play again  ↗' : 'Back to the pitch  ↗';
-  const status = !started ? 'Ready to kick off.' : match.phase === 'ended' ? `Full time. Meadow ${match.score[0]}, Terracotta ${match.score[1]}.` : paused ? 'Match paused.' : goal ? `Goal! Meadow ${match.score[0]}, Terracotta ${match.score[1]}.` : 'Match in play. Meadow attacks right.';
+  const status = !started ? 'Ready to kick off.' : match.phase === 'ended' ? `Full time. Meadow ${match.score[0]}, Terracotta ${match.score[1]}.` : paused ? 'Match paused.' : goal ? `Goal! Meadow ${match.score[0]}, Terracotta ${match.score[1]}.` : match.players.some(p => p.team === 1 && p.stagger > 0) ? 'Tackle! Opponent off balance.' : 'Match in play. Meadow attacks right.';
   if (status !== lastStatus) { $('soccer-status').textContent = status; lastStatus = status; }
 }
 $('soccer-overlay-action').onclick = () => { if (!started || match.phase === 'ended') startMatch(); else setPaused(false); };
@@ -208,7 +212,7 @@ $('soccer-god-mode').onclick = () => {
   $('soccer-god-mode').textContent = match.godMode ? 'God mode · ON' : 'God mode · OFF';
   $('soccer-god-mode').setAttribute('aria-pressed', String(match.godMode));
   $('soccer-god-mode').classList.toggle('enabled', match.godMode);
-  $('soccer-god-help').textContent = match.godMode ? 'Unlocked: H homes toward goal. N bends with your direction. Both need possession.' : 'Enable to unlock H homing shots and N curve shots.';
+  $('soccer-god-help').textContent = match.godMode ? 'Unlocked: H homes toward goal. N always tackles an opponent within reach. H needs possession.' : 'Enable to unlock H homing shots and N guaranteed close-range tackles.';
   for (const button of document.querySelectorAll<HTMLButtonElement>('[data-soccer-key="KeyH"], [data-soccer-key="KeyN"]')) button.disabled = !match.godMode;
   $('soccer-special-controls').classList.toggle('locked', !match.godMode);
   updateHud();

@@ -3,18 +3,18 @@ export const BALL_RADIUS = 7;
 export type Team = 0 | 1;
 export type Phase = 'ready' | 'playing' | 'goal' | 'ended';
 export type Difficulty = 'easy' | 'medium' | 'hard';
-export interface Input { x: number; y: number; sprint: boolean; charge: boolean; pass: boolean; shoot: boolean; switch: boolean; homing: boolean; curve: boolean }
-export const idleInput = (): Input => ({ x: 0, y: 0, sprint: false, charge: false, pass: false, shoot: false, switch: false, homing: false, curve: false });
+export interface Input { x: number; y: number; sprint: boolean; charge: boolean; pass: boolean; shoot: boolean; switch: boolean; homing: boolean; tackle: boolean }
+export const idleInput = (): Input => ({ x: 0, y: 0, sprint: false, charge: false, pass: false, shoot: false, switch: false, homing: false, tackle: false });
 export interface Player {
   id: number; team: Team; keeper: boolean; x: number; y: number; vx: number; vy: number;
-  faceX: number; faceY: number; stamina: number; cooldown: number; think: number;
+  faceX: number; faceY: number; stamina: number; cooldown: number; think: number; stagger: number;
 }
 export interface Ball { x: number; y: number; vx: number; vy: number; owner: number | null; lock: number; held: number }
 export interface SpecialShot {
-  kind: 'homing' | 'curve'; team: Team; shooter: number; age: number;
-  bend: number; heading: number; waypoint: { x: number; y: number } | null; replan: number;
+  kind: 'homing'; team: Team; shooter: number; age: number;
+  bend: number; waypoint: { x: number; y: number } | null; replan: number;
 }
-export interface GameEvent { type: 'kick' | 'steal' | 'save' | 'goal' | 'end'; team?: Team }
+export interface GameEvent { type: 'kick' | 'steal' | 'save' | 'tackle' | 'goal' | 'end'; team?: Team }
 const clamp = (n: number, a: number, b: number) => Math.max(a, Math.min(b, n));
 const distance = (a: {x: number; y: number}, b: {x: number; y: number}) => Math.hypot(a.x - b.x, a.y - b.y);
 const direction = (x: number, y: number): [number, number] => { const d = Math.hypot(x, y); return d > 0.001 ? [x / d, y / d] : [0, 0]; };
@@ -48,7 +48,7 @@ export class Match {
     this.players = [];
     for (const t of [0, 1] as Team[]) {
       const positions = t === 0 ? [[102, 340], [365, 280], [305, 445]] : [[922, 340], [659, 400], [719, 235]];
-      positions.forEach(([x, y], index) => this.players.push({ id: t * 3 + index, team: t, keeper: index === 0, x, y, vx: 0, vy: 0, faceX: t === 0 ? 1 : -1, faceY: 0, stamina: 1, cooldown: 0, think: .6 }));
+      positions.forEach(([x, y], index) => this.players.push({ id: t * 3 + index, team: t, keeper: index === 0, x, y, vx: 0, vy: 0, faceX: t === 0 ? 1 : -1, faceY: 0, stamina: 1, cooldown: 0, think: .6, stagger: 0 }));
     }
     const p = this.players[team * 3 + 1];
     p.x = 512 + (team === 0 ? -20 : 20); p.y = 340;
@@ -94,16 +94,31 @@ export class Match {
     }
     this.charge = 0;
   }
-  specialKick(p: Player, kind: 'homing' | 'curve', input: Input) {
+  specialKick(p: Player) {
     if (!this.godMode || this.phase !== 'playing' || p.team !== 0 || p.id !== this.selected || this.ball.owner !== p.id) return;
-    // Up/down selects the bow of the arc. Horizontal input selects its destination side.
-    const bend = input.y === 0 ? (this.random() < .5 ? -1 : 1) : Math.sign(input.y);
-    const horizontal = input.x === 0 ? 1 : Math.sign(input.x);
-    const heading = horizontal > 0 ? 0 : Math.PI;
-    const initialAngle = kind === 'curve' ? heading : 0;
-    this.kick(p, Math.cos(initialAngle), Math.sin(initialAngle), kind === 'homing' ? 660 : 720);
-    this.specialShot = { kind, team: p.team, shooter: p.id, age: 0, bend, heading, waypoint: null, replan: 0 };
+    this.kick(p, 1, 0, 660);
+    this.specialShot = { kind: 'homing', team: p.team, shooter: p.id, age: 0, bend: this.random() < .5 ? -1 : 1, waypoint: null, replan: 0 };
     this.charge = 0;
+  }
+  tackle(p: Player) {
+    if (!this.godMode || this.phase !== 'playing' || p.team !== 0 || p.id !== this.selected) return;
+    // No accuracy roll or tackle cooldown: every press with an opponent in reach succeeds.
+    const target = this.players.filter(q => q.team !== p.team && distance(p, q) <= 62)
+      .sort((a, b) => Number(b.id === this.ball.owner) - Number(a.id === this.ball.owner) || distance(p, a) - distance(p, b))[0];
+    if (!target) return;
+    let [nx, ny] = direction(target.x - p.x, target.y - p.y);
+    if (!nx && !ny) [nx, ny] = [p.faceX || 1, p.faceY];
+    target.stagger = 1.1; target.cooldown = 1.35;
+    target.vx = nx * 210; target.vy = ny * 210;
+    if (this.ball.owner === target.id) {
+      this.specialShot = null; this.ball.owner = null; this.ball.held = 0;
+      this.ball.x = target.x; this.ball.y = target.y;
+      this.ball.vx = nx * 480; this.ball.vy = ny * 480;
+      this.ball.lock = .28;
+      // Give the loose ball room to escape, including when it rebounds near a board.
+      for (const q of this.players) q.cooldown = Math.max(q.cooldown, .28);
+    }
+    this.events.push({ type: 'tackle', team: p.team });
   }
   /** A small visibility graph routes the homing ball through open space, including around the keeper. */
   private homingWaypoint(shot: SpecialShot): { x: number; y: number } {
@@ -152,22 +167,11 @@ export class Match {
     const shot = this.specialShot;
     if (!shot) return;
     shot.age += dt;
-    if (!this.godMode || this.ball.owner !== null || shot.age > (shot.kind === 'homing' ? 5 : 1.05)) {
-      if (shot.kind === 'curve' && this.ball.owner === null) { this.ball.vx = Math.cos(shot.heading) * Math.hypot(this.ball.vx, this.ball.vy); this.ball.vy = 0; }
-      this.specialShot = null; return;
-    }
-    if (shot.kind === 'homing') {
-      shot.replan -= dt;
-      if (!shot.waypoint || shot.replan <= 0 || distance(this.ball, shot.waypoint) < 18) { shot.waypoint = this.homingWaypoint(shot); shot.replan = .07; }
-      const [nx, ny] = direction(shot.waypoint.x - this.ball.x, shot.waypoint.y - this.ball.y);
-      this.ball.vx = nx * 660; this.ball.vy = ny * 660;
-    } else {
-      // A full sine cycle bows toward the chosen side and returns to horizontal at the end.
-      const horizontal = Math.cos(shot.heading) > 0 ? 1 : -1;
-      const angle = shot.heading + shot.bend * horizontal * Math.sin(2 * Math.PI * Math.min(1, shot.age / 1.05));
-      const speed = 720 * Math.exp(-.22 * shot.age);
-      this.ball.vx = Math.cos(angle) * speed; this.ball.vy = Math.sin(angle) * speed;
-    }
+    if (!this.godMode || this.ball.owner !== null || shot.age > 5) { this.specialShot = null; return; }
+    shot.replan -= dt;
+    if (!shot.waypoint || shot.replan <= 0 || distance(this.ball, shot.waypoint) < 18) { shot.waypoint = this.homingWaypoint(shot); shot.replan = .07; }
+    const [nx, ny] = direction(shot.waypoint.x - this.ball.x, shot.waypoint.y - this.ball.y);
+    this.ball.vx = nx * 660; this.ball.vy = ny * 660;
   }
   private steer(p: Player, dx: number, dy: number, speed: number, dt: number) {
     const [nx, ny] = direction(dx, dy);
@@ -223,12 +227,18 @@ export class Match {
     const controlled = this.players[this.selected];
     if (input.charge && this.ball.owner === controlled.id) this.charge = Math.min(1, this.charge + dt / .85);
     if (input.pass) this.pass(controlled);
-    else if (input.homing && this.godMode) this.specialKick(controlled, 'homing', input);
-    else if (input.curve && this.godMode) this.specialKick(controlled, 'curve', input);
+    else if (input.homing && this.godMode) this.specialKick(controlled);
+    else if (input.tackle && this.godMode) this.tackle(controlled);
     else if (input.shoot) this.shoot(controlled, input);
     if (this.ball.owner !== this.selected) this.charge = 0;
     for (const p of this.players) {
       p.cooldown = Math.max(0, p.cooldown - dt);
+      if (p.stagger > 0) {
+        p.stagger = Math.max(0, p.stagger - dt);
+        p.x = clamp(p.x + p.vx * dt, 87, 937); p.y = clamp(p.y + p.vy * dt, 85, 595);
+        p.vx *= Math.exp(-7 * dt); p.vy *= Math.exp(-7 * dt);
+        continue;
+      }
       if (p.id === this.selected) {
         const moving = Math.hypot(input.x, input.y) > .1;
         const sprint = input.sprint && moving && p.stamina > .02;

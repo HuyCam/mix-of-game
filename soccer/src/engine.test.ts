@@ -72,7 +72,7 @@ test('full matches on all difficulty levels stay finite, bounded, and finish', (
 });
 
 test('special shots require God mode and the selected human player to own the ball', () => {
- for (const key of ['homing', 'curve'] as const) {
+ for (const key of ['homing'] as const) {
   const m = new Match(); m.start(); m.step(1 / 120, { ...idleInput(), [key]: true });
   assert.equal(m.ball.owner, 1); assert.equal(m.specialShot, null);
   m.setGodMode(true); m.ball.owner = 4; m.step(1 / 120, { ...idleInput(), [key]: true });
@@ -95,36 +95,31 @@ test('H steers around moving defenders and the keeper and enters between the pos
   assert.ok(bent); assert.deepEqual(m.score, [1, 0], level); assert.equal(m.phase, 'goal'); assert.equal(m.specialShot, null);
  }
 });
-test('N bends down-left, up-left, down-right, and up-right as requested', () => {
- for (const x of [-1, 1]) for (const y of [-1, 1]) {
-  const m = new Match(); m.start(); m.setGodMode(true); scatter(m);
-  m.players[1].x = 512; m.players[1].y = 340; m.ball.owner = 1;
-  m.step(1 / 120, { ...idleInput(), x, y, curve: true });
-  tick(m, .25);
-  assert.equal(m.specialShot?.kind, 'curve');
-  assert.equal(Math.sign(m.ball.x - 512), x); assert.equal(Math.sign(m.ball.y - 340), y);
-  assert.equal(Math.sign(m.ball.vx), x); assert.equal(Math.sign(m.ball.vy), y);
+
+test('N is disabled without God mode and cannot tackle outside reach', () => {
+ const m = new Match(); m.start(); const p=m.players[1], q=m.players[4]; q.x=p.x+40;q.y=p.y;m.ball.owner=q.id;
+ m.step(1/120,{...idleInput(),tackle:true}); assert.equal(q.stagger,0); assert.equal(m.ball.owner,q.id);
+ m.setGodMode(true);q.x=p.x+100;m.step(1/120,{...idleInput(),tackle:true});assert.equal(q.stagger,0);
+});
+test('N always staggers and dispossesses opponents from every approach, including keepers', () => {
+ for(const level of ['easy','medium','hard'] as const) for(const id of [3,4,5]) for(const [dx,dy] of [[40,0],[-40,0],[0,40],[0,-40]]) {
+  const m=new Match();m.start();m.difficulty=level;m.setGodMode(true);scatter(m);
+  const p=m.players[1],q=m.players[id];p.x=512;p.y=340;q.x=512+dx;q.y=340+dy;q.cooldown=0;
+  m.ball.owner=q.id;m.ball.x=q.x;m.ball.y=q.y;m.ball.lock=10;
+  m.step(1/120,{...idleInput(),tackle:true});assert.equal(m.ball.owner,null);assert.ok(q.stagger>1);assert.ok(Math.hypot(m.ball.vx,m.ball.vy)>450);
+  const initialDistance=Math.hypot(m.ball.x-q.x,m.ball.y-q.y);tick(m,.2);
+  assert.equal(m.ball.owner,null);assert.ok(Math.hypot(m.ball.x-q.x,m.ball.y-q.y)>initialDistance+40);
+  p.x=q.x-35;p.y=q.y;
+  m.step(1/120,{...idleInput(),tackle:true});assert.ok(q.stagger>1,'Repeated in-range tackle cannot fail');
  }
 });
-test('N chooses either bend without vertical input and defaults to the opponent side', () => {
- const m = new Match(); m.setGodMode(true); const bends = new Set<number>();
- for (let i = 0; i < 20; i++) {
-  m.start(); m.step(1 / 120, { ...idleInput(), curve: true });
-  bends.add(m.specialShot!.bend); assert.ok(m.ball.vx > 0);
- }
- assert.deepEqual([...bends].sort(), [-1, 1]);
+test('tackle recovers, does not affect teammate possession, and resets on kickoff', () => {
+ const m=new Match();m.start();m.setGodMode(true);const p=m.players[1],q=m.players[4];q.x=p.x+40;q.y=p.y;
+ m.step(1/120,{...idleInput(),tackle:true});assert.equal(m.ball.owner,1);assert.ok(q.stagger>0);
+ tick(m,1.2);assert.equal(q.stagger,0);m.start();assert.ok(m.players.every(p=>p.stagger===0));assert.equal(m.godMode,true);
 });
-test('disabling God mode cancels steering; new matches preserve the toggle but clear flights', () => {
- const m = new Match(); m.start(); m.setGodMode(true); m.step(1 / 120, { ...idleInput(), homing: true });
- const before = { vx: m.ball.vx, vy: m.ball.vy }; m.setGodMode(false);
- assert.equal(m.specialShot, null); assert.equal(m.ball.vx, before.vx); assert.equal(m.ball.vy, before.vy);
- m.setGodMode(true); m.start(); assert.equal(m.godMode, true); assert.equal(m.specialShot, null);
- m.step(1 / 120, { ...idleInput(), curve: true }); assert.equal((m as Match).specialShot?.kind, 'curve');
- m.remaining = .001; m.step(1 / 120, idleInput()); assert.equal(m.specialShot, null);
-});
-test('board impact removes curve steering so rebounds follow normal physics', () => {
- const m = new Match(); m.start(); m.setGodMode(true); scatter(m); m.players[1].x = 512; m.players[1].y = 90;
- m.step(1 / 120, { ...idleInput(), x: 1, y: -1, curve: true });
- for (let i = 0; i < 120 && m.specialShot; i++) m.step(1 / 120, idleInput());
- assert.equal(m.specialShot, null); assert.ok(m.ball.vy > 0); assert.equal(m.phase, 'playing');
+test('turning God mode off cancels homing and prevents new tackles', () => {
+ const m=new Match();m.start();m.setGodMode(true);m.step(1/120,{...idleInput(),homing:true});assert.ok(m.specialShot);
+ m.setGodMode(false);assert.equal(m.specialShot,null);m.start();const p=m.players[1],q=m.players[4];q.x=p.x+40;q.y=p.y;
+ m.step(1/120,{...idleInput(),tackle:true});assert.equal(q.stagger,0);
 });
