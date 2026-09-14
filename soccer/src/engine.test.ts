@@ -222,3 +222,70 @@ test('CR7 expires, stays on its activating player, and clears when disabled or r
  m.useSkill(m.players[m.selected],idleInput());assert.ok(m.cr7);m.setGodMode(false);assert.equal(m.cr7,null);
  m.setGodMode(true);m.useSkill(m.players[m.selected],idleInput());m.start();assert.equal(m.cr7,null);
 });
+
+test('new skills respect God mode and shot possession gates', () => {
+ for(const skill of ['meteor','timefreeze','phantom','colossus','mirror'] as const){
+  const m=new Match();m.start();m.selectedSkill=skill;const x=m.players[1].x;
+  m.useSkill(m.players[1],idleInput());assert.equal(m.specialShot,null);assert.equal(m.timeFreeze,null);assert.equal(m.colossus,null);assert.equal(m.players[1].x,x);
+  m.setGodMode(true);m.ball.owner=null;m.useSkill(m.players[1],idleInput());
+  if(skill==='meteor'||skill==='mirror')assert.equal(m.specialShot,null);
+  else assert.ok(m.timeFreeze||m.colossus||m.lastDash);
+ }
+});
+test('Meteor detonates at half a second and knocks off-axis opponents and keeper, not teammates',()=>{
+ const m=new Match();m.start();scatter(m);m.setGodMode(true);m.selectedSkill='meteor';
+ const p=m.players[1];p.x=300;p.y=340;m.ball.owner=p.id;m.useSkill(p,{...idleInput(),x:1});
+ tick(m,.49);assert.equal(m.specialShot?.kind,'meteor');
+ for(const [id,y] of [[3,420],[4,260],[2,400]]){m.players[id].x=750;m.players[id].y=y;m.players[id].stagger=0;}
+ tick(m,1/120);assert.ok(m.meteorFlash);assert.equal(m.specialShot,null);
+ assert.ok(m.players[3].stagger>1&&m.players[4].stagger>1);assert.equal(m.players[2].stagger,0);
+ assert.equal(m.ball.owner,null);assert.ok(Math.hypot(m.ball.vx,m.ball.vy)<390);assert.deepEqual(m.score,[0,0]);
+});
+test('Time Freeze stops every opponent and their carried ball while home team and clock advance',()=>{
+ const m=new Match();m.start(5);scatter(m);m.setGodMode(true);m.selectedSkill='timefreeze';
+ m.ball.owner=5;m.ball.x=m.players[5].x;m.ball.y=m.players[5].y;m.ball.lock=10;
+ m.useSkill(m.players[1],idleInput());const positions=m.players.slice(5).map(p=>[p.x,p.y,p.think,p.cooldown]);const ball=[m.ball.x,m.ball.y],x=m.players[1].x;
+ tick(m,.5,{y:1});assert.deepEqual(m.players.slice(5).map(p=>[p.x,p.y,p.think,p.cooldown]),positions);assert.deepEqual([m.ball.x,m.ball.y],ball);assert.equal(m.ball.owner,5);assert.ok(m.remaining<120);assert.equal(m.players[1].x,x);assert.ok(m.players[1].y>150);
+ assert.equal(m.knockback(m.players[5],1,0),false);tick(m,1.6);assert.equal(m.timeFreeze,null);
+});
+test('frozen keeper cannot catch a shot or react',()=>{
+ const m=new Match();m.start();scatter(m);m.setGodMode(true);m.selectedSkill='timefreeze';m.useSkill(m.players[1],idleInput());
+ const k=m.players[3];k.x=919;k.y=340;k.cooldown=0;m.ball={x:885,y:340,vx:840,vy:0,owner:null,lock:0,held:0};tick(m,.1);assert.equal(m.score[0],1);assert.equal(m.timeFreeze,null);
+});
+test('Phantom blinks through defenders with the ball, normalizes aim, and cannot bypass cooldown by toggling',()=>{
+ const m=new Match();m.start();scatter(m);m.setGodMode(true);m.selectedSkill='phantom';const p=m.players[1];p.x=300;p.y=340;p.faceX=0;p.faceY=-1;m.ball.x=319;m.ball.y=340;
+ m.players[4].x=370;m.players[4].y=340;m.useSkill(p,{...idleInput(),x:1});assert.equal(p.x,445);assert.equal(p.y,340);assert.equal(m.ball.x,464);assert.equal(m.players[4].stagger,0);
+ m.setGodMode(false);m.setGodMode(true);m.useSkill(p,{...idleInput(),x:1});assert.equal(p.x,445);
+ tick(m,.5);assert.equal(m.lastDash,null);tick(m,2.6);const from={x:p.x,y:p.y};m.useSkill(p,{...idleInput(),x:1,y:1});assert.ok(Math.abs(Math.hypot(p.x-from.x,p.y-from.y)-145)<.001);
+ m.phantomCooldown=0;p.x=935;m.useSkill(p,{...idleInput(),x:1});assert.equal(p.x,937);
+});
+test('Colossus protects possession, ignores knockback and bulldozes contact without speed boost',()=>{
+ const m=new Match();m.start();scatter(m);m.setGodMode(true);m.selectedSkill='colossus';const p=m.players[1],q=m.players[4];p.x=400;p.y=340;p.faceX=1;p.faceY=0;m.ball.x=419;m.ball.y=340;m.ball.lock=0;
+ m.useSkill(p,idleInput());q.x=423;q.y=340;q.cooldown=0;assert.equal(m.knockback(p,1,0),false);tick(m,1/120);assert.equal(m.ball.owner,p.id);assert.ok(q.stagger>1);assert.equal(p.stagger,0);assert.equal(p.x,400);
+ m.selected=2;assert.equal(m.colossus?.player,1);m.setGodMode(false);assert.equal(m.colossus,null);
+});
+test('Mirror uses identical ball speeds, two nonphysical decoys and a keeper committed to its chosen line',()=>{
+ const m=new Match();m.start();scatter(m);m.setGodMode(true);m.selectedSkill='mirror';const p=m.players[1];p.x=400;p.y=340;m.useSkill(p,{...idleInput(),x:1});
+ assert.equal(m.mirror?.ghosts.length,2);for(const g of m.mirror!.ghosts)assert.ok(Math.abs(Math.hypot(g.vx,g.vy)-Math.hypot(m.ball.vx,m.ball.vy))<1e-6);
+ const k=m.players[3];k.x=919;k.y=340;k.vx=k.vy=0;
+ m.mirror!.guess=0;Object.assign(m.mirror!.ghosts[0],{x:800,y:410,vx:100,vy:0});Object.assign(m.ball,{x:800,y:270,vx:100,vy:0});
+ tick(m,.1);assert.ok(k.y>340,'keeper moves toward decoy despite real ball above');assert.deepEqual(m.score,[0,0]);
+ m.mirror!.ghosts[0].x=1000;tick(m,1/120);assert.deepEqual(m.score,[0,0],'decoy crossing goal cannot score');
+ tick(m,1.4);assert.equal(m.mirror,null);
+});
+test('new effect timers pause during Magical Pass selection and reset on a new match',()=>{
+ const m=new Match();m.start();m.setGodMode(true);const p=m.players[1];
+ for(const skill of ['timefreeze','colossus','phantom'] as const){m.selectedSkill=skill;m.useSkill(p,idleInput());}
+ m.selectedSkill='magical';m.useSkill(p,idleInput());const time=m.remaining;tick(m,1);assert.equal(m.timeFreeze?.remaining,2);assert.equal(m.colossus?.remaining,5);assert.equal(m.phantomCooldown,3);assert.equal(m.remaining,time);
+ m.start();assert.equal(m.timeFreeze,null);assert.equal(m.colossus,null);assert.equal(m.lastDash,null);assert.equal(m.phantomCooldown,0);
+});
+test('Meteor phases through its launch path without contact damage and detonates early at boards',()=>{
+ const m=new Match();m.start();scatter(m);m.setGodMode(true);m.selectedSkill='meteor';const p=m.players[1],q=m.players[4];p.x=400;p.y=200;q.x=417;q.y=200;q.cooldown=0;
+ m.useSkill(p,{...idleInput(),x:1});tick(m,.05);assert.equal(q.stagger,0);assert.equal(m.ball.owner,null);assert.equal(m.specialShot?.kind,'meteor');
+ m.ball.x=943;tick(m,1/120);assert.equal(m.specialShot,null);assert.ok(m.meteorFlash);assert.ok(m.ball.vx<0);assert.deepEqual(m.score,[0,0]);
+});
+test('Colossus expires after five seconds and full time clears all new effects',()=>{
+ const m=new Match();m.start();scatter(m);m.setGodMode(true);m.ball.owner=null;m.ball.x=512;m.ball.y=500;m.selectedSkill='colossus';m.useSkill(m.players[1],idleInput());tick(m,5);assert.equal(m.colossus,null);
+ for(const skill of ['colossus','timefreeze','phantom'] as const){m.selectedSkill=skill;m.useSkill(m.players[m.selected],idleInput());}
+ m.remaining=.001;tick(m,1/120);assert.equal(m.phase,'ended');assert.equal(m.timeFreeze,null);assert.equal(m.colossus,null);assert.equal(m.lastDash,null);assert.equal(m.phantomCooldown,0);
+});

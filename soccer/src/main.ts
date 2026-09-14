@@ -14,7 +14,7 @@ const accepted = new Set(['KeyW', 'KeyA', 'KeyS', 'KeyD', 'ArrowUp', 'ArrowDown'
 function resetInput() { document.querySelectorAll('[data-soccer-key]').forEach(b => b.classList.remove('held')); held.clear(); pending = { pass: false, shoot: false, switch: false, homing: false, tackle: false, skill: false }; match.cancelCharge(); accumulator = 0; }
 function sound(type: GameEvent['type'] | 'start') {
   if (muted || !audio) return;
-  const notes = type === 'goal' ? [392, 494, 587, 784] : type === 'end' ? [587, 494, 392] : type === 'start' ? [740, 988] : type === 'save' ? [190, 260] : type === 'steal' ? [160] : [280];
+  const notes = type === 'goal' ? [392, 494, 587, 784] : type === 'end' ? [587, 494, 392] : type === 'start' ? [740, 988] : type === 'explosion' ? [65, 40] : type === 'save' ? [190, 260] : type === 'steal' ? [160] : [280];
   notes.forEach((frequency, i) => {
     const osc = audio!.createOscillator(), gain = audio!.createGain(), time = audio!.currentTime + i * .10;
     osc.type = type === 'kick' ? 'triangle' : 'sine'; osc.frequency.setValueAtTime(frequency, time);
@@ -126,7 +126,18 @@ class PitchScene extends Phaser.Scene {
     const g = this.dynamic; g.clear();
     while(this.marks.length>match.players.length)this.marks.pop()!.destroy();
     while(this.marks.length<match.players.length)this.marks.push(this.add.text(0,0,'',{fontFamily:'Arial',fontSize:'10px',fontStyle:'bold'}).setOrigin(.5));
-    this.ballTrail.forEach((p, i) => { g.fillStyle(match.specialShot?.kind === 'magical' ? 0xdd9cff : match.specialShot?.kind === 'dragon' ? 0xff922e : match.specialShot ? 0x8de7fa : 0xf0f1cf, Math.min(.5, i / 45)); g.fillCircle(p.x, p.y, 3 + i * .35); });
+    if(match.specialShot?.kind!=='mirror') this.ballTrail.forEach((p, i) => { g.fillStyle(match.specialShot?.kind === 'meteor' ? 0xff492c : match.specialShot?.kind === 'magical' ? 0xdd9cff : match.specialShot?.kind === 'dragon' ? 0xff922e : match.specialShot ? 0x8de7fa : 0xf0f1cf, Math.min(.5, i / 45)); g.fillCircle(p.x, p.y, 3 + i * .35); });
+    if(match.lastDash){
+      const dash=match.lastDash, alpha=1-dash.age/.45;
+      for(const t of [.15,.4,.65]){const x=dash.from.x+(dash.to.x-dash.from.x)*t,y=dash.from.y+(dash.to.y-dash.from.y)*t;
+        g.fillStyle(0xc8bcff,alpha*.32);g.fillCircle(x,y-14,8);g.fillRoundedRect(x-12,y-7,24,20,4);g.fillRect(x-9,y+10,7,8);g.fillRect(x+2,y+10,7,8);
+      }
+    }
+    if(match.meteorFlash){const f=match.meteorFlash,t=f.age/.45,r=reducedMotion?f.radius:12+f.radius*t;
+      g.fillStyle(0xffa13c,(1-t)*.18);g.fillCircle(f.x,f.y,r);
+      g.lineStyle(6,0xff6036,1-t);g.strokeCircle(f.x,f.y,r);
+      g.lineStyle(3,0xfff3c3,1-t);g.strokeCircle(f.x,f.y,r*.8);
+    }
     const selected = match.players[match.selected];
     g.lineStyle(2.5, 0xe0f69e, 1); g.strokeEllipse(selected.x, selected.y + 7, 44, 32);
     g.fillStyle(0xe0f69e); g.fillTriangle(selected.x - 5, selected.y - 35, selected.x + 5, selected.y - 35, selected.x, selected.y - 28);
@@ -138,6 +149,9 @@ class PitchScene extends Phaser.Scene {
         g.lineStyle(2.5,0xffdb66,.85);g.strokeEllipse(p.x,p.y+5,65*pulse,46*pulse);
         g.lineStyle(1,0xfff3b4,.65);g.strokeCircle(p.x,p.y,31*pulse);
       }
+      const size=match.isColossus(p)?1.4:1;
+      if(size>1){g.fillStyle(0xe5c999,.3);for(let i=0;i<5;i++){const a=i*1.26+match.elapsed;g.fillEllipse(p.x+Math.cos(a)*29,p.y+15+Math.sin(a)*10,12,6);}}
+      g.save();g.translateCanvas(p.x,p.y);g.scaleCanvas(size,size);g.translateCanvas(-p.x,-p.y);
       if (p.stagger > 0) {
         g.lineStyle(2, 0xf5c779, .9); g.strokeEllipse(p.x, p.y - 30, 30, 10);
         for (let i = 0; i < 3; i++) { const angle = match.elapsed * 7 + i * Math.PI * 2 / 3; g.fillStyle(0xffe1a0); g.fillCircle(p.x + Math.cos(angle) * 15, p.y - 30 + Math.sin(angle) * 5, 2.5); }
@@ -153,14 +167,23 @@ class PitchScene extends Phaser.Scene {
       const hx = p.x + p.faceX * 2, hy = p.y - 14 + p.faceY * 2;
       g.fillStyle(p.id % 2 ? 0xd4a277 : 0xa97151); g.fillCircle(hx, hy, 8);
       g.fillStyle(0x30312b); g.fillEllipse(hx - p.faceX * 2, hy - 3 - p.faceY * 2, 15, 9);
-      this.marks[p.id].setText(String(p.number)).setColor(p.team===0?'#183e38':'#fff5e4').setPosition(p.x, p.y).setDepth(5 + p.y / 1000);
+      if(match.isFrozen(p)){
+        g.fillStyle(0x9ce7ff,.45);g.fillRoundedRect(p.x-16,p.y-24,32,44,8);
+        g.lineStyle(2,0xe1faff,.9);for(const [dx,dy] of [[-17,-15],[15,-27],[13,12]]){g.lineBetween(p.x+dx-4,p.y+dy,p.x+dx+4,p.y+dy);g.lineBetween(p.x+dx,p.y+dy-4,p.x+dx,p.y+dy+4);}
+      }
+      g.restore();
+      this.marks[p.id].setScale(size).setText(String(p.number)).setColor(p.team===0?'#183e38':'#fff5e4').setPosition(p.x, p.y).setDepth(5 + p.y / 1000);
     }
     const b = match.ball;
-    if (match.specialShot) { if(match.specialShot.kind === 'dragon'){g.fillStyle(0xff831c,.22);g.fillCircle(b.x,b.y,19);} g.lineStyle(2, match.specialShot.kind === 'magical' ? 0xdd9cff : match.specialShot.kind === 'dragon' ? 0xffa044 : 0x8de7fa, .9); g.strokeCircle(b.x, b.y, 12); }
+    if (match.specialShot && match.specialShot.kind!=='mirror') { if(match.specialShot.kind === 'dragon'){g.fillStyle(0xff831c,.22);g.fillCircle(b.x,b.y,19);} g.lineStyle(2, match.specialShot.kind === 'meteor' ? 0xff492c : match.specialShot.kind === 'magical' ? 0xdd9cff : match.specialShot.kind === 'dragon' ? 0xffa044 : 0x8de7fa, .9); g.strokeCircle(b.x, b.y, 12); }
+    const balls=match.mirror?[b,...match.mirror.ghosts]:[b];
+    for(const b of balls){
+      if(match.mirror){const speed=Math.hypot(b.vx,b.vy)||1;for(let i=1;i<=7;i++){g.fillStyle(0xf0f1cf,.35*(1-i/8));g.fillCircle(b.x-b.vx/speed*i*6,b.y-b.vy/speed*i*6,4);}}
     g.fillStyle(0x142e23, .4); g.fillEllipse(b.x + 3, b.y + 6, 17, 9);
     g.fillStyle(0xf9f5de); g.fillCircle(b.x, b.y, 7);
     g.lineStyle(1, 0xc6d1b3); g.strokeCircle(b.x, b.y, 7);
     g.fillStyle(0x30463d); g.fillTriangle(b.x - 3, b.y - 2, b.x + 2, b.y - 3, b.x + 1, b.y + 3); g.fillCircle(b.x - 4, b.y + 3, 1.4); g.fillCircle(b.x + 4, b.y, 1.5);
+    }
     if (match.charge > 0) {
       g.fillStyle(0x142c25, .85); g.fillRoundedRect(selected.x - 22, selected.y + 25, 44, 6, 3);
       g.fillStyle(match.charge > .8 ? 0xf2a184 : 0xe0f69e); g.fillRoundedRect(selected.x - 21, selected.y + 26, 42 * match.charge, 4, 2);
@@ -209,7 +232,19 @@ function updateHud() {
   $('soccer-clock').classList.toggle('urgent', seconds <= 20);
   $('soccer-stamina').style.width = `${match.players[match.selected].stamina * 100}%`;
   $('soccer-player').textContent = `NO. ${String(match.players[match.selected].number).padStart(2,'0')}`;
-  $('soccer-possession').textContent = match.cr7 ? `CR7 · ${Math.ceil(match.cr7.remaining)}s` : match.specialShot ? match.specialShot.kind === 'magical' ? 'MAGICAL PASS' : match.specialShot.kind === 'dragon' ? 'DRAGON SHOT' : 'HOMING SHOT' : match.owner ? match.owner.team === 0 ? 'YOUR BALL' : 'THEIR BALL' : 'LOOSE BALL';
+  const hints:Record<Match['selectedSkill'],string>={
+    dragon:'With possession: aim with WASD or arrows. An unstoppable orange shot.',
+    magical:'With possession: choose an outfield receiver on the paused pitch for a curved pass.',
+    cr7:'An 8-second aura: 1.5× speed and contact knockback. No ball needed.',
+    meteor:'With possession: aim a fiery shot. Explodes after 0.5 seconds, scattering nearby opponents before becoming a loose ball.',
+    timefreeze:'Freeze every opponent for 2 seconds. Your team and the match clock keep running. No ball needed.',
+    phantom:'Blink in your input or facing direction. 3-second cooldown. No ball needed.',
+    colossus:'Grow for 5 seconds: immune to steals and knockback, and bulldoze nearby opponents. No ball needed.',
+    mirror:'With possession: aim three identical shots. Two are illusions; the keeper has to guess.'
+  };
+  $('soccer-skill-hint').textContent=hints[match.selectedSkill];
+  $('soccer-skill-status').textContent=[match.timeFreeze?`Freeze ${Math.ceil(match.timeFreeze.remaining)}s`:'',match.colossus?`Colossus ${Math.ceil(match.colossus.remaining)}s`:'',match.cr7?`CR7 ${Math.ceil(match.cr7.remaining)}s`:'',match.selectedSkill==='phantom'?(match.phantomCooldown>0?`Dash ready in ${match.phantomCooldown.toFixed(1)}s`:'Dash ready'):''].filter(Boolean).join(' · ');
+  $('soccer-possession').textContent = match.cr7 ? `CR7 · ${Math.ceil(match.cr7.remaining)}s` : match.specialShot ? match.specialShot.kind === 'meteor' ? 'METEOR SHOT' : match.specialShot.kind === 'mirror' ? 'MIRROR SHOT' : match.specialShot.kind === 'magical' ? 'MAGICAL PASS' : match.specialShot.kind === 'dragon' ? 'DRAGON SHOT' : 'HOMING SHOT' : match.owner ? match.owner.team === 0 ? 'YOUR BALL' : 'THEIR BALL' : 'LOOSE BALL';
   $('soccer-pause').textContent = paused ? 'Resume' : 'Pause';
   ($('soccer-pause') as HTMLButtonElement).disabled = match.selectingPass || !started || match.phase === 'ended';
   const overlay = $('soccer-overlay');
@@ -220,7 +255,7 @@ function updateHud() {
   $('soccer-overlay-title').textContent = !started ? 'A little pitch.\nA lot to play for.' : match.phase === 'ended' ? match.score[0] > match.score[1] ? 'That’s your win.' : match.score[0] < match.score[1] ? 'Their day. Your rematch?' : 'Nothing between you.' : goal ? match.kickoffTeam === 1 ? 'Get in! Your goal.' : 'They found the net.' : 'Match paused.';
   $('soccer-overlay-note').textContent = !started ? 'Choose your teams and match length. Make your moment.' : match.phase === 'ended' ? `Meadow ${match.score[0]} — ${match.score[1]} Terracotta` : goal ? 'The conceding team takes the kickoff.' : 'Your match is right where you left it.';
   $('soccer-overlay-action').textContent = !started ? 'Kick off  ↗' : match.phase === 'ended' ? 'Play again  ↗' : 'Back to the pitch  ↗';
-  const status = match.selectingPass ? 'Choose an outfield teammate to receive your Magical Pass. Match paused.' : !started ? 'Ready to kick off.' : match.phase === 'ended' ? `Full time. Meadow ${match.score[0]}, Terracotta ${match.score[1]}.` : paused ? 'Match paused.' : goal ? `Goal! Meadow ${match.score[0]}, Terracotta ${match.score[1]}.` : match.players.some(p => p.team === 1 && p.stagger > 0) ? 'Tackle! Opponent off balance.' : 'Match in play. Meadow attacks right.';
+  const status = match.selectingPass ? 'Choose an outfield teammate to receive your Magical Pass. Match paused.' : !started ? 'Ready to kick off.' : match.phase === 'ended' ? `Full time. Meadow ${match.score[0]}, Terracotta ${match.score[1]}.` : paused ? 'Match paused.' : goal ? `Goal! Meadow ${match.score[0]}, Terracotta ${match.score[1]}.` : match.players.some(p => p.team === 1 && p.stagger > 0) ? 'Opponents are off balance.' : 'Match in play. Meadow attacks right.';
   if (status !== lastStatus) { $('soccer-status').textContent = status; lastStatus = status; }
 }
 $('soccer-overlay-action').onclick = () => { if (!started || match.phase === 'ended') startMatch(); else setPaused(false); };
@@ -243,7 +278,7 @@ $('soccer-god-mode').onclick = () => {
   updateHud();
   if (started && !paused) $('soccer-stage').focus({ preventScroll: true });
 };
-$('soccer-skill').onchange = () => { match.selectedSkill = ($('soccer-skill') as HTMLSelectElement).value as 'dragon' | 'magical' | 'cr7'; };
+$('soccer-skill').onchange = () => { match.selectedSkill = ($('soccer-skill') as HTMLSelectElement).value as Match['selectedSkill']; };
 $('soccer-level').onchange = () => { match.difficulty = ($('soccer-level') as HTMLSelectElement).value as Match['difficulty']; };
 $('soccer-sound').onclick = () => {
   muted = !muted; $('soccer-sound').textContent = muted ? 'Sound off' : 'Sound on'; $('soccer-sound').setAttribute('aria-pressed', String(!muted));

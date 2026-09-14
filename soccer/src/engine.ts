@@ -2,6 +2,7 @@ export const FIELD = { left: 72, right: 952, top: 70, bottom: 610, centerX: 512,
 export const BALL_RADIUS = 7;
 export type Team = 0 | 1;
 export type Phase = 'ready' | 'playing' | 'goal' | 'ended';
+export type Skill = 'dragon' | 'magical' | 'cr7' | 'meteor' | 'timefreeze' | 'phantom' | 'colossus' | 'mirror';
 export type Difficulty = 'easy' | 'medium' | 'hard';
 export interface Input { x: number; y: number; sprint: boolean; charge: boolean; pass: boolean; shoot: boolean; switch: boolean; homing: boolean; tackle: boolean; skill: boolean }
 export const idleInput = (): Input => ({ x: 0, y: 0, sprint: false, charge: false, pass: false, shoot: false, switch: false, homing: false, tackle: false, skill: false });
@@ -11,11 +12,11 @@ export interface Player {
 }
 export interface Ball { x: number; y: number; vx: number; vy: number; owner: number | null; lock: number; held: number }
 export interface SpecialShot {
-  kind: 'homing' | 'dragon' | 'magical';
+  kind: 'homing' | 'dragon' | 'magical' | 'meteor' | 'mirror';
   flight?: {receiver:number; start:{x:number;y:number}; control:{x:number;y:number}; duration:number}; team: Team; shooter: number; age: number;
   bend: number; waypoint: { x: number; y: number } | null; replan: number;
 }
-export interface GameEvent { type: 'kick' | 'steal' | 'save' | 'tackle' | 'goal' | 'end'; team?: Team }
+export interface GameEvent { type: 'explosion' | 'kick' | 'steal' | 'save' | 'tackle' | 'goal' | 'end'; team?: Team }
 const clamp = (n: number, a: number, b: number) => Math.max(a, Math.min(b, n));
 const distance = (a: {x: number; y: number}, b: {x: number; y: number}) => Math.hypot(a.x - b.x, a.y - b.y);
 const direction = (x: number, y: number): [number, number] => { const d = Math.hypot(x, y); return d > 0.001 ? [x / d, y / d] : [0, 0]; };
@@ -38,17 +39,24 @@ export class Match {
   elapsed = 0;
   difficulty: Difficulty = 'medium';
   godMode = false;
-  selectedSkill: 'dragon' | 'magical' | 'cr7' = 'dragon';
+  selectedSkill: Skill = 'dragon';
   cr7: {player:number;remaining:number} | null = null;
+  timeFreeze: {remaining:number} | null = null;
+  colossus: {player:number;remaining:number} | null = null;
+  phantomCooldown = 0;
+  lastDash: {from:{x:number;y:number};to:{x:number;y:number};player:number;age:number} | null = null;
+  meteorFlash: {x:number;y:number;age:number;radius:number} | null = null;
+  mirror: {ghosts:{x:number;y:number;vx:number;vy:number}[];guess:number;age:number} | null = null;
   selectingPass = false;
   specialShot: SpecialShot | null = null;
-  setGodMode(enabled: boolean) { this.godMode = enabled; if(!enabled)this.cr7=null; if (!enabled && this.specialShot?.kind === 'homing') this.specialShot = null; }
+  setGodMode(enabled: boolean) { this.godMode = enabled; if(!enabled){this.cr7=null;this.timeFreeze=null;this.colossus=null;} if (!enabled && this.specialShot?.kind === 'homing') this.specialShot = null; }
   private seed = 71429;
 
   constructor() { this.resetPositions(0); }
   private random() { this.seed = (Math.imul(this.seed, 1664525) + 1013904223) >>> 0; return this.seed / 4294967296; }
   start(teamSize: 3 | 5 = this.teamSize, duration: 120 | 240 | 360 = this.duration) { this.teamSize = teamSize; this.duration = duration; this.score = [0, 0]; this.remaining = duration; this.elapsed = 0; this.phase = 'playing'; this.events = []; this.resetPositions(0); }
   resetPositions(team: Team) {
+    this.clearNewEffects();
     this.cr7=null;
     this.selectingPass = false;
     this.specialShot = null;
@@ -67,7 +75,7 @@ export class Match {
   get owner() { return this.ball.owner === null ? null : this.players[this.ball.owner]; }
   cancelCharge() { this.charge = 0; }
   private kick(p: Player, dx: number, dy: number, power: number) {
-    this.specialShot = null;
+    this.specialShot = null;this.mirror=null;
     const [nx, ny] = direction(dx, dy);
     this.ball.owner = null; this.ball.held = 0; this.ball.lock = .13;
     this.ball.x = p.x + nx * 23; this.ball.y = p.y + ny * 23;
@@ -136,17 +144,66 @@ export class Match {
     this.specialShot = { kind: 'homing', team: p.team, shooter: p.id, age: 0, bend: this.random() < .5 ? -1 : 1, waypoint: null, replan: 0 };
     this.charge = 0;
   }
+  isFrozen(p: Player) { return this.timeFreeze !== null && p.team === 1; }
+  isColossus(p: Player) { return this.colossus?.player === p.id; }
+  private clearNewEffects() {
+    this.timeFreeze=null;this.colossus=null;this.phantomCooldown=0;this.lastDash=null;this.meteorFlash=null;this.mirror=null;
+  }
+  /** All skill knockback goes through this gate so frozen and Colossus players stay immovable. */
+  knockback(p: Player, nx: number, ny: number, speed=330, shift=34): boolean {
+    if(this.isColossus(p)||this.isFrozen(p))return false;
+    const [dx,dy]=direction(nx||(!ny?1:0),ny);
+    p.x=clamp(p.x+dx*shift,87,937);p.y=clamp(p.y+dy*shift,85,595);
+    p.vx=dx*speed;p.vy=dy*speed;p.stagger=1.2;p.cooldown=1.45;return true;
+  }
+  private meteorImpact() {
+    const shot=this.specialShot;
+    if(shot?.kind!=='meteor')return;
+    const center={x:this.ball.x,y:this.ball.y};
+    this.meteorFlash={...center,age:0,radius:125};
+    for(const p of this.players)if(p.team!==shot.team&&distance(p,center)<=125)this.knockback(p,p.x-center.x,p.y-center.y,360,35);
+    this.specialShot=null;this.ball.lock=.15;
+    // The blast clears the defense and leaves an ordinary, catchable ball in open play.
+    this.ball.vx*=.42;this.ball.vy*=.42;
+    this.events.push({type:'explosion',team:shot.team});
+  }
+  keeperTarget(p: Player): {x:number;y:number} {
+    if(p.team===1 && this.specialShot?.kind==='mirror' && this.mirror && this.mirror.guess>=0)return this.mirror.ghosts[this.mirror.guess];
+    return this.ball;
+  }
   useSkill(p: Player, input: Input) {
     if (!this.godMode || this.phase !== 'playing' || this.selectingPass || p.team !== 0 || p.id !== this.selected) return;
     if(this.selectedSkill === 'cr7'){this.cr7={player:p.id,remaining:8};return;}
+    if(this.selectedSkill === 'timefreeze'){
+      this.timeFreeze={remaining:2};
+      for(const q of this.players)if(q.team===1){q.vx=0;q.vy=0;}
+      if(this.owner?.team===1){this.ball.vx=0;this.ball.vy=0;}
+      return;
+    }
+    if(this.selectedSkill === 'colossus'){this.colossus={player:p.id,remaining:5};p.stagger=0;p.vx=0;p.vy=0;return;}
+    if(this.selectedSkill === 'phantom'){
+      if(this.phantomCooldown>0)return;
+      const [nx,ny]=direction(input.x||input.y?input.x:p.faceX,input.x||input.y?input.y:p.faceY);
+      const from={x:p.x,y:p.y};
+      p.x=clamp(p.x+nx*145,87,937);p.y=clamp(p.y+ny*145,85,595);p.faceX=nx;p.faceY=ny;p.vx=0;p.vy=0;
+      if(this.ball.owner===p.id){this.ball.x=clamp(this.ball.x+p.x-from.x,79,945);this.ball.y=clamp(this.ball.y+p.y-from.y,77,603);this.ball.vx=0;this.ball.vy=0;}
+      this.phantomCooldown=3;this.lastDash={from,to:{x:p.x,y:p.y},player:p.id,age:0};return;
+    }
     if(this.ball.owner !== p.id)return;
     if(this.selectedSkill === 'magical'){ this.selectingPass = true; this.charge = 0; return; }
     const dx = input.x || input.y ? input.x : FIELD.right + 20 - p.x;
     const dy = input.x || input.y ? input.y : FIELD.centerY - p.y;
-    this.kick(p, dx, dy, 1150);
+    if(this.selectedSkill==='mirror'){
+      const [bx,by]=direction(dx,dy),lines=[-.22,0,.22].map(angle=>({nx:bx*Math.cos(angle)-by*Math.sin(angle),ny:bx*Math.sin(angle)+by*Math.cos(angle)}));
+      const real=Math.floor(this.random()*3),guess=Math.floor(this.random()*3);
+      this.kick(p,lines[real].nx,lines[real].ny,720);
+      this.mirror={age:0,guess:guess===real?-1:guess-(guess>real?1:0),ghosts:lines.filter((_,i)=>i!==real).map(line=>({x:p.x+line.nx*23,y:p.y+line.ny*23,vx:line.nx*720,vy:line.ny*720}))};
+      this.specialShot={kind:'mirror',team:p.team,shooter:p.id,age:0,bend:0,waypoint:null,replan:0};this.charge=0;return;
+    }
+    this.kick(p, dx, dy, this.selectedSkill==='meteor'?900:1150);
     // Start at the player's feet: sweep the entire launch path rather than skipping nearby opponents.
     this.ball.x = p.x; this.ball.y = p.y;
-    this.specialShot = {kind:'dragon',team:p.team,shooter:p.id,age:0,bend:0,waypoint:null,replan:0};
+    this.specialShot = {kind:this.selectedSkill==='meteor'?'meteor':'dragon',team:p.team,shooter:p.id,age:0,bend:0,waypoint:null,replan:0};
     this.charge = 0;
   }
   choosePassReceiver(id: number): boolean {
@@ -166,7 +223,7 @@ export class Match {
     // No accuracy roll or tackle cooldown: every press with an opponent in reach succeeds.
     const target = this.players.filter(q => q.team !== p.team && distance(p, q) <= 62)
       .sort((a, b) => Number(b.id === this.ball.owner) - Number(a.id === this.ball.owner) || distance(p, a) - distance(p, b))[0];
-    if (!target) return;
+    if (!target || this.isColossus(target) || this.isFrozen(target)) return;
     let [nx, ny] = direction(target.x - p.x, target.y - p.y);
     if (!nx && !ny) [nx, ny] = [p.faceX || 1, p.faceY];
     target.stagger = 1.1; target.cooldown = 1.35;
@@ -234,7 +291,8 @@ export class Match {
       const y=u*u*f.start.y+2*u*t*f.control.y+t*t*receiver.y;
       this.ball.vx=(x-this.ball.x)/dt;this.ball.vy=(y-this.ball.y)/dt;return;
     }
-    if (shot.kind === 'dragon') return;
+    if (shot.kind === 'dragon' || shot.kind === 'meteor') return;
+    if(shot.kind==='mirror'){shot.age+=dt;if(shot.age>=1.4){this.specialShot=null;this.mirror=null;}return;}
     shot.age += dt;
     if (!this.godMode || this.ball.owner !== null || shot.age > 5) { this.specialShot = null; return; }
     shot.replan -= dt;
@@ -256,10 +314,11 @@ export class Match {
     let tx = p.x, ty = p.y, speed = p.team === 0 ? 166 : settings[this.difficulty].speed;
     p.think -= dt;
     if (p.keeper) {
+      const perceived=this.keeperTarget(p);
       const homeX = p.team === 0 ? 105 : 919;
       tx = homeX;
-      ty = clamp(340 + (this.ball.y - 340) * .7, FIELD.goalTop + 10, FIELD.goalBottom - 10);
-      if (!owner && Math.abs(this.ball.x - homeX) < 95) { tx = clamp(this.ball.x, homeX - 24, homeX + 24); ty = clamp(this.ball.y, 242, 438); }
+      ty = clamp(340 + (perceived.y - 340) * .7, FIELD.goalTop + 10, FIELD.goalBottom - 10);
+      if (!owner && Math.abs(perceived.x - homeX) < 95) { tx = clamp(perceived.x, homeX - 24, homeX + 24); ty = clamp(perceived.y, 242, 438); }
       speed = p.team === 0 ? 205 : settings[this.difficulty].speed + 32;
       if (owner === p && this.ball.held > .7) this.pass(p);
     } else if (owner === p) {
@@ -316,9 +375,14 @@ export class Match {
       if (this.goalWait <= 0) { this.resetPositions(this.kickoffTeam); this.phase = 'playing'; }
       return;
     }
+    if(this.timeFreeze){this.timeFreeze.remaining=Math.max(0,this.timeFreeze.remaining-dt);if(this.timeFreeze.remaining<1e-8)this.timeFreeze=null;}
+    if(this.colossus){this.colossus.remaining=Math.max(0,this.colossus.remaining-dt);if(this.colossus.remaining<1e-8)this.colossus=null;}
+    this.phantomCooldown=Math.max(0,this.phantomCooldown-dt);
+    if(this.lastDash){this.lastDash.age+=dt;if(this.lastDash.age>=.45)this.lastDash=null;}
+    if(this.meteorFlash){this.meteorFlash.age+=dt;if(this.meteorFlash.age>=.45)this.meteorFlash=null;}
     if(this.cr7){this.cr7.remaining=Math.max(0,this.cr7.remaining-dt);if(this.cr7.remaining===0)this.cr7=null;}
     this.elapsed += dt; this.remaining = Math.max(0, this.remaining - dt);
-    if (this.remaining <= 0) { this.phase = 'ended'; this.cr7=null; this.specialShot = null; this.charge = 0; this.events.push({ type: 'end' }); return; }
+    if (this.remaining <= 0) { this.phase = 'ended'; this.clearNewEffects(); this.cr7=null; this.specialShot = null; this.charge = 0; this.events.push({ type: 'end' }); return; }
     if (input.switch) this.switchPlayer(input);
     const controlled = this.players[this.selected];
     if (input.charge && this.ball.owner === controlled.id) this.charge = Math.min(1, this.charge + dt / .85);
@@ -330,6 +394,8 @@ export class Match {
     if(this.selectingPass)return;
     if (this.ball.owner !== this.selected) this.charge = 0;
     for (const p of this.players) {
+      if(this.isFrozen(p)){p.vx=0;p.vy=0;continue;}
+      if(this.isColossus(p))p.stagger=0;
       if(this.specialShot?.flight?.receiver === p.id){p.vx=0;p.vy=0;continue;}
       p.cooldown = Math.max(0, p.cooldown - dt);
       if (p.stagger > 0) {
@@ -345,14 +411,13 @@ export class Match {
         this.steer(p, input.x, input.y, (sprint ? 274 : 190) * (this.charge > 0 ? .67 : 1), dt);
       } else { p.stamina = Math.min(1, p.stamina + dt * .18); this.ai(p, dt); }
     }
-    if(this.cr7){
-      const runner=this.players[this.cr7.player];
+    for(const buff of [this.cr7,this.colossus])if(buff){
+      const runner=this.players[buff.player];
       for(const opponent of this.players){
-        if(opponent.team===runner.team || distance(runner,opponent)>46)continue;
+        if(opponent.team===runner.team || distance(runner,opponent)>(this.isColossus(runner)?51:46))continue;
         let [nx,ny]=direction(opponent.x-runner.x,opponent.y-runner.y);
         if(!nx&&!ny)[nx,ny]=[runner.faceX||1,runner.faceY];
-        opponent.x=clamp(runner.x+nx*57,87,937);opponent.y=clamp(runner.y+ny*57,85,595);
-        opponent.vx=nx*330;opponent.vy=ny*330;opponent.stagger=1.1;opponent.cooldown=1.35;
+        if(!this.knockback(opponent,nx,ny,330,Math.max(12,57-distance(runner,opponent))))continue;
         if(this.ball.owner===opponent.id){
           this.specialShot=null;this.ball.owner=null;this.ball.held=0;this.ball.lock=.25;
           this.ball.x=opponent.x;this.ball.y=opponent.y;this.ball.vx=nx*460;this.ball.vy=ny*460;
@@ -362,22 +427,27 @@ export class Match {
     // Resolve player overlap, including keepers, without imparting explosive velocities.
     for (let i = 0; i < this.players.length; i++) for (let j = i + 1; j < this.players.length; j++) {
       const a = this.players[i], b = this.players[j], d = distance(a, b);
-      if (d < 27) {
-        const [nx, ny] = d < .001 ? [1, 0] : direction(a.x - b.x, a.y - b.y), overlap = (27 - d) * .5;
-        a.x = clamp(a.x + nx * overlap, 87, 937); a.y = clamp(a.y + ny * overlap, 85, 595);
-        b.x = clamp(b.x - nx * overlap, 87, 937); b.y = clamp(b.y - ny * overlap, 85, 595);
+      const radius=this.isColossus(a)||this.isColossus(b)?33:27;
+      if (d < radius) {
+        const [nx, ny] = d < .001 ? [1, 0] : direction(a.x - b.x, a.y - b.y), overlap = radius - d;
+        const fixedA=this.isColossus(a)||this.isFrozen(a),fixedB=this.isColossus(b)||this.isFrozen(b);
+        const moveA=fixedA?0:fixedB?1:.5,moveB=fixedB?0:fixedA?1:.5;
+        a.x = clamp(a.x + nx * overlap * moveA, 87, 937); a.y = clamp(a.y + ny * overlap * moveA, 85, 595);
+        b.x = clamp(b.x - nx * overlap * moveB, 87, 937); b.y = clamp(b.y - ny * overlap * moveB, 85, 595);
       }
     }
     this.ball.lock = Math.max(0, this.ball.lock - dt);
     const owner = this.owner;
     if (owner) {
+      if(!this.isFrozen(owner)){
       this.ball.held += dt;
       const reach = Math.hypot(owner.vx, owner.vy) > 220 ? 30 : 19;
       this.ball.x += (owner.x + owner.faceX * reach - this.ball.x) * (1 - Math.exp(-22 * dt));
       this.ball.y += (owner.y + owner.faceY * reach - this.ball.y) * (1 - Math.exp(-22 * dt));
       this.ball.vx = owner.vx; this.ball.vy = owner.vy;
-      if (this.ball.lock <= 0) {
-        const thief = this.players.find(p => p.team !== owner.team && p.cooldown <= 0 && distance(p, this.ball) < 25 && ((p.x - owner.x) * owner.faceX + (p.y - owner.y) * owner.faceY > -3));
+      }
+      if (this.ball.lock <= 0 && !this.isColossus(owner)) {
+        const thief = this.players.find(p => p.team !== owner.team && !this.isFrozen(p) && p.cooldown <= 0 && distance(p, this.ball) < 25 && ((p.x - owner.x) * owner.faceX + (p.y - owner.y) * owner.faceY > -3));
         if (thief) {
           this.ball.owner = null; this.ball.lock = .12;
           this.ball.vx = (thief.team === 0 ? 1 : -1) * 155; this.ball.vy = (this.ball.y - thief.y) * 5;
@@ -386,16 +456,24 @@ export class Match {
         }
       }
     } else {
+    if(this.mirror){
+      if(this.specialShot?.kind!=='mirror')this.mirror=null;
+      else {this.mirror.age+=dt;for(const ghost of this.mirror.ghosts){ghost.x+=ghost.vx*dt;ghost.y+=ghost.vy*dt;ghost.vx*=Math.exp(-.48*dt);ghost.vy*=Math.exp(-.48*dt);}}
+    }
       this.guideSpecial(dt);
       // Small substeps prevent fast shots skipping thin posts, boards, or goalkeeper contacts.
       const pieces = Math.max(1, Math.ceil(Math.hypot(this.ball.vx, this.ball.vy) * dt / 5));
       for (let i = 0; i < pieces; i++) {
         this.ball.x += this.ball.vx * dt / pieces; this.ball.y += this.ball.vy * dt / pieces;
+        if(this.specialShot?.kind==='meteor'){
+          this.specialShot.age+=dt/pieces;
+          if(this.specialShot.age>=.5-1e-8)this.meteorImpact();
+        }
         if (this.bounds()) return;
         this.collectBall();
         if (this.ball.owner !== null) break;
       }
-      const drag = this.specialShot && this.specialShot.kind !== 'homing' ? 1 : Math.exp(-.48 * dt); this.ball.vx *= drag; this.ball.vy *= drag;
+      const drag = this.specialShot && this.specialShot.kind !== 'homing' && this.specialShot.kind !== 'mirror' ? 1 : Math.exp(-.48 * dt); this.ball.vx *= drag; this.ball.vy *= drag;
     }
     if (this.bounds()) return;
   }
@@ -407,24 +485,24 @@ export class Match {
         receiver.stagger=0;receiver.cooldown=0;this.selected=receiver.id;this.specialShot=null;return;
       }
     }
+    // Meteor phases through the flight path; its damage comes only from the area blast.
+    if(this.specialShot?.kind === 'meteor')return;
     if (this.specialShot?.kind === 'dragon' || this.specialShot?.kind === 'magical') {
       const shot = this.specialShot;
       const [nx,ny] = direction(-this.ball.vy,this.ball.vx);
       for (const p of this.players) {
         if (p.team === shot.team || distance(p,this.ball) > (p.keeper ? 29 : 25)) continue;
         const side = (p.x-this.ball.x)*nx+(p.y-this.ball.y)*ny >= 0 ? 1 : -1;
-        p.x = clamp(p.x+nx*side*34,87,937); p.y = clamp(p.y+ny*side*34,85,595);
-        p.vx = nx*side*290; p.vy = ny*side*290;
-        p.stagger = 1.2; p.cooldown = 1.45;
+        this.knockback(p,nx*side,ny*side,290,34);
       }
       return;
     }
     for (const p of [...this.players].sort((a, b) => distance(a, this.ball) - distance(b, this.ball))) {
       const speed = Math.hypot(this.ball.vx, this.ball.vy);
-      if (p.cooldown > 0 || distance(p, this.ball) > (p.keeper ? 26 : 22)) continue;
+      if (this.isFrozen(p) || p.cooldown > 0 || distance(p, this.ball) > (p.keeper ? 26 : 22)) continue;
       // Keepers may block even during the short release lock; field players cannot re-catch a kick instantly.
       if (!p.keeper && this.ball.lock > 0) continue;
-      this.specialShot = null;
+      this.specialShot = null;this.mirror=null;
       if (speed < 390 || p.keeper) {
         this.ball.owner = p.id; this.ball.lock = .42; this.ball.held = 0;
         this.ball.vx = 0; this.ball.vy = 0;
@@ -446,10 +524,12 @@ export class Match {
       const scoring: Team = b.x > 512 ? 0 : 1;
       this.score[scoring]++; this.kickoffTeam = scoring === 0 ? 1 : 0;
       this.specialShot = null;
-      this.cr7=null;this.phase = 'goal'; this.goalWait = 2.3; this.charge = 0;
+      this.clearNewEffects();this.cr7=null;this.phase = 'goal'; this.goalWait = 2.3; this.charge = 0;
       this.ball.owner = null; this.ball.vx = 0; this.ball.vy = 0;
       this.events.push({ type: 'goal', team: scoring }); return true;
     }
+    if(this.specialShot?.kind==='meteor'&&(b.y<FIELD.top+r||b.y>FIELD.bottom-r||(!mouth&&(b.x<FIELD.left+r||b.x>FIELD.right-r))))this.meteorImpact();
+    if(this.specialShot?.kind==='mirror'&&(b.y<FIELD.top+r||b.y>FIELD.bottom-r||(!mouth&&(b.x<FIELD.left+r||b.x>FIELD.right-r))))this.mirror=null;
     if (b.y < FIELD.top + r) { this.specialShot = null; b.y = FIELD.top + r; b.vy = Math.abs(b.vy) * .8; }
     if (b.y > FIELD.bottom - r) { this.specialShot = null; b.y = FIELD.bottom - r; b.vy = -Math.abs(b.vy) * .8; }
     if (!mouth) {
