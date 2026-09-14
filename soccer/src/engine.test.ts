@@ -123,3 +123,78 @@ test('turning God mode off cancels homing and prevents new tackles', () => {
  m.setGodMode(false);assert.equal(m.specialShot,null);m.start();const p=m.players[1],q=m.players[4];q.x=p.x+40;q.y=p.y;
  m.step(1/120,{...idleInput(),tackle:true});assert.equal(q.stagger,0);
 });
+
+test('both team sizes and all match lengths create valid lineups and finish', () => {
+ for(const size of [3,5] as const)for(const duration of [120,240,360] as const){
+  const m=new Match();m.start(size,duration);assert.equal(m.players.length,size*2);assert.equal(m.remaining,duration);
+  for(const team of [0,1]){const ps=m.players.filter(p=>p.team===team);assert.equal(ps.filter(p=>p.keeper).length,1);assert.equal(ps.filter(p=>!p.keeper).length,size-1);}
+  if(size===5)assert.deepEqual(m.players.slice(0,5).map(p=>p.role),['keeper','forward','defender','upper','lower']);
+  tick(m,1800);assert.equal(m.phase,'ended');assert.equal(m.remaining,0);
+  assert.ok(m.players.every(p=>Number.isFinite(p.x)&&p.x>=87&&p.x<=937&&p.y>=85&&p.y<=595));
+ }
+});
+test('5v5 directional passing and switching reach every outfield teammate, never keepers',()=>{
+ const m=new Match();m.start(5,240);const p=m.players[1];p.x=500;p.y=340;
+ m.players[2].x=300;m.players[2].y=340;m.players[3].x=500;m.players[3].y=150;m.players[4].x=500;m.players[4].y=530;
+ for(const [x,y,id] of [[-1,0,2],[0,-1,3],[0,1,4]]){
+  m.selected=1;assert.equal(m.passTarget(p,{...idleInput(),x,y})?.id,id);
+  m.switchPlayer({...idleInput(),x,y});assert.equal(m.selected,id);
+ }
+ m.selected=1;m.ball.owner=1;m.pass(p,{...idleInput(),y:1});assert.equal(m.selected,4);assert.equal(m.ball.owner,null);
+ m.selected=1;m.ball.x=m.players[3].x;m.ball.y=m.players[3].y;m.switchPlayer(idleInput());assert.equal(m.selected,3);
+});
+test('5v5 goal reset preserves format, clock, keeper IDs, and God mode',()=>{
+ const m=new Match();m.start(5,360);m.setGodMode(true);m.remaining=300;m.resetPositions(1);
+ assert.equal(m.players.length,10);assert.equal(m.ball.owner,6);assert.equal(m.remaining,300);assert.equal(m.godMode,true);
+ assert.deepEqual(m.players.filter(p=>p.keeper).map(p=>p.id),[0,5]);
+ const p=m.players[4],q=m.players[9];m.selected=4;p.x=500;p.y=340;q.x=535;q.y=340;m.ball.owner=9;
+ m.step(1/120,{...idleInput(),tackle:true});assert.equal(m.ball.owner,null);assert.ok(q.stagger>0);
+ m.start(3,120);assert.equal(m.players.length,6);assert.equal(m.remaining,120);
+});
+
+test('Dragon Shot requires God mode and possession and follows directional aim',()=>{
+ const m=new Match();m.start();m.step(1/120,{...idleInput(),skill:true});assert.equal(m.ball.owner,1);
+ m.setGodMode(true);m.ball.owner=4;m.useSkill(m.players[1],idleInput());assert.equal(m.specialShot,null);
+ m.ball.owner=1;m.useSkill(m.players[1],{...idleInput(),x:-1,y:-1});assert.equal((m as Match).specialShot?.kind,'dragon');
+ assert.ok(m.ball.vx<0&&m.ball.vy<0);assert.ok(Math.hypot(m.ball.vx,m.ball.vy)>840);
+});
+test('Dragon Shot passes teammates and knocks every opposing role aside without interception',()=>{
+ for(const size of [3,5] as const) for(let id=size;id<size*2;id++) {
+  const m=new Match();m.start(size,120);m.setGodMode(true);scatter(m);
+  m.players[1].x=300;m.players[1].y=340;m.ball.owner=1;
+  m.players[2].x=330;m.players[2].y=340;m.players[2].cooldown=0;
+  const opponent=m.players[id];opponent.x=380;opponent.y=340;opponent.cooldown=0;
+  m.useSkill(m.players[1],{...idleInput(),x:1});tick(m,.12);
+  assert.equal(m.ball.owner,null);assert.equal(m.players[2].stagger,0);assert.ok(opponent.stagger>0);
+  assert.ok(Math.abs(opponent.y-340)>25);assert.equal(m.specialShot?.kind,'dragon');
+  tick(m,.6);assert.deepEqual(m.score,[1,0]);assert.equal(m.specialShot,null);
+ }
+});
+test('Dragon persists at full speed after God mode is disabled until a boundary hit',()=>{
+ const m=new Match();m.start();m.setGodMode(true);scatter(m);m.players[1].x=512;m.players[1].y=340;m.ball.owner=1;
+ m.useSkill(m.players[1],{...idleInput(),y:1});m.setGodMode(false);tick(m,.1);
+ assert.equal((m as Match).specialShot?.kind,'dragon');assert.ok(Math.abs(Math.hypot(m.ball.vx,m.ball.vy)-1150)<.01);
+ tick(m,.2);assert.equal(m.specialShot,null);assert.ok(m.ball.vy<0);assert.deepEqual(m.score,[0,0]);
+});
+
+test('Magical Pass freezes the match until a valid outfield receiver is selected',()=>{
+ const m=new Match();m.start(5,240);m.setGodMode(true);m.selectedSkill='magical';m.step(1/120,{...idleInput(),skill:true});assert.equal(m.selectingPass,true);
+ const before=JSON.stringify({players:m.players,ball:m.ball,remaining:m.remaining});tick(m,3,{x:1,shoot:true});assert.equal(JSON.stringify({players:m.players,ball:m.ball,remaining:m.remaining}),before);
+ assert.equal(m.choosePassReceiver(0),false);assert.equal(m.choosePassReceiver(1),false);assert.equal(m.choosePassReceiver(6),false);assert.equal(m.selectingPass,true);
+ assert.equal(m.choosePassReceiver(4),true);assert.equal(m.selectingPass,false);
+});
+test('Magical Pass follows a pronounced curve, knocks opponents away and delivers to the chosen teammate',()=>{
+ for(const size of [3,5] as const){
+ const m=new Match();m.start(size,120);m.setGodMode(true);m.selectedSkill='magical';scatter(m);
+ const p=m.players[1],r=m.players[2];p.x=300;p.y=340;r.x=720;r.y=340;m.ball.x=319;m.ball.y=340;m.ball.owner=1;
+ m.useSkill(p,idleInput());assert.ok(m.choosePassReceiver(2));
+ const f=m.specialShot!.flight!,enemy=m.players[size];enemy.x=(f.start.x+2*f.control.x+r.x)/4;enemy.y=(f.start.y+2*f.control.y+r.y)/4;enemy.cooldown=0;
+ let maxBend=0,hit=false;
+ for(let i=0;i<240&&m.specialShot;i++){
+  // Keep this opponent in the planned passing lane until the collision occurs.
+  if(!hit){enemy.vx=0;enemy.vy=0;enemy.x=(f.start.x+2*f.control.x+r.x)/4;enemy.y=(f.start.y+2*f.control.y+r.y)/4;}
+  m.step(1/120,idleInput());maxBend=Math.max(maxBend,Math.abs(m.ball.y-340));hit ||= enemy.stagger>0;
+ }
+ assert.ok(maxBend>40);assert.ok(hit);assert.equal(m.ball.owner,2);assert.equal(m.selected,2);assert.equal(m.specialShot,null);
+ }
+});

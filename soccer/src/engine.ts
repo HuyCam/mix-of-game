@@ -3,15 +3,16 @@ export const BALL_RADIUS = 7;
 export type Team = 0 | 1;
 export type Phase = 'ready' | 'playing' | 'goal' | 'ended';
 export type Difficulty = 'easy' | 'medium' | 'hard';
-export interface Input { x: number; y: number; sprint: boolean; charge: boolean; pass: boolean; shoot: boolean; switch: boolean; homing: boolean; tackle: boolean }
-export const idleInput = (): Input => ({ x: 0, y: 0, sprint: false, charge: false, pass: false, shoot: false, switch: false, homing: false, tackle: false });
+export interface Input { x: number; y: number; sprint: boolean; charge: boolean; pass: boolean; shoot: boolean; switch: boolean; homing: boolean; tackle: boolean; skill: boolean }
+export const idleInput = (): Input => ({ x: 0, y: 0, sprint: false, charge: false, pass: false, shoot: false, switch: false, homing: false, tackle: false, skill: false });
 export interface Player {
-  id: number; team: Team; keeper: boolean; x: number; y: number; vx: number; vy: number;
+  id: number; team: Team; keeper: boolean; role: 'keeper' | 'forward' | 'defender' | 'upper' | 'lower'; number: number; x: number; y: number; vx: number; vy: number;
   faceX: number; faceY: number; stamina: number; cooldown: number; think: number; stagger: number;
 }
 export interface Ball { x: number; y: number; vx: number; vy: number; owner: number | null; lock: number; held: number }
 export interface SpecialShot {
-  kind: 'homing'; team: Team; shooter: number; age: number;
+  kind: 'homing' | 'dragon' | 'magical';
+  flight?: {receiver:number; start:{x:number;y:number}; control:{x:number;y:number}; duration:number}; team: Team; shooter: number; age: number;
   bend: number; waypoint: { x: number; y: number } | null; replan: number;
 }
 export interface GameEvent { type: 'kick' | 'steal' | 'save' | 'tackle' | 'goal' | 'end'; team?: Team }
@@ -26,6 +27,8 @@ export class Match {
   ball: Ball = { x: 512, y: 340, vx: 0, vy: 0, owner: null, lock: 0, held: 0 };
   score = [0, 0];
   remaining = 120;
+  teamSize: 3 | 5 = 3;
+  duration: 120 | 240 | 360 = 120;
   selected = 1;
   phase: Phase = 'ready';
   goalWait = 0;
@@ -35,22 +38,26 @@ export class Match {
   elapsed = 0;
   difficulty: Difficulty = 'medium';
   godMode = false;
+  selectedSkill: 'dragon' | 'magical' = 'dragon';
+  selectingPass = false;
   specialShot: SpecialShot | null = null;
-  setGodMode(enabled: boolean) { this.godMode = enabled; if (!enabled) this.specialShot = null; }
+  setGodMode(enabled: boolean) { this.godMode = enabled; if (!enabled && this.specialShot?.kind === 'homing') this.specialShot = null; }
   private seed = 71429;
 
   constructor() { this.resetPositions(0); }
   private random() { this.seed = (Math.imul(this.seed, 1664525) + 1013904223) >>> 0; return this.seed / 4294967296; }
-  start() { this.score = [0, 0]; this.remaining = 120; this.elapsed = 0; this.phase = 'playing'; this.events = []; this.resetPositions(0); }
+  start(teamSize: 3 | 5 = this.teamSize, duration: 120 | 240 | 360 = this.duration) { this.teamSize = teamSize; this.duration = duration; this.score = [0, 0]; this.remaining = duration; this.elapsed = 0; this.phase = 'playing'; this.events = []; this.resetPositions(0); }
   resetPositions(team: Team) {
+    this.selectingPass = false;
     this.specialShot = null;
     this.kickoffTeam = team;
     this.players = [];
     for (const t of [0, 1] as Team[]) {
-      const positions = t === 0 ? [[102, 340], [365, 280], [305, 445]] : [[922, 340], [659, 400], [719, 235]];
-      positions.forEach(([x, y], index) => this.players.push({ id: t * 3 + index, team: t, keeper: index === 0, x, y, vx: 0, vy: 0, faceX: t === 0 ? 1 : -1, faceY: 0, stamina: 1, cooldown: 0, think: .6, stagger: 0 }));
+      const home = this.teamSize === 5 ? [[102,340],[410,340],[270,340],[350,190],[350,490]] : [[102,340],[365,280],[305,445]];
+      const positions = t === 0 ? home : home.map(([x,y]) => [1024-x,680-y]);
+      positions.forEach(([x, y], index) => this.players.push({ id: t * this.teamSize + index, team: t, keeper: index === 0, role: (['keeper','forward','defender','upper','lower'] as const)[index], number: [1,7,4,8,9][index], x, y, vx: 0, vy: 0, faceX: t === 0 ? 1 : -1, faceY: 0, stamina: 1, cooldown: 0, think: .6, stagger: 0 }));
     }
-    const p = this.players[team * 3 + 1];
+    const p = this.players[team * this.teamSize + 1];
     p.x = 512 + (team === 0 ? -20 : 20); p.y = 340;
     this.ball = { x: 512, y: 340, vx: 0, vy: 0, owner: p.id, lock: .8, held: 0 };
     this.selected = 1; this.charge = 0;
@@ -66,9 +73,36 @@ export class Match {
     p.cooldown = .36;
     this.events.push({ type: 'kick', team: p.team });
   }
-  pass(p: Player) {
+  switchPlayer(input: Input) {
+    const current = this.players[this.selected];
+    const [nx, ny] = direction(input.x, input.y);
+    const candidates = this.players.filter(p => p.team === 0 && !p.keeper && p.id !== current.id);
+    candidates.sort((a,b) => {
+      const value = (p: Player) => {
+        const [dx,dy] = direction(p.x-current.x,p.y-current.y);
+        return (nx || ny ? (dx*nx+dy*ny)*1000 : 0) - distance(p,this.ball);
+      };
+      return value(b)-value(a);
+    });
+    if(candidates[0]) this.selected=candidates[0].id;
+    this.charge=0;
+  }
+  passTarget(p: Player, input?: Input): Player | undefined {
+    const [nx,ny] = direction(input?.x || 0,input?.y || 0);
+    const score = (q: Player) => {
+      const dx=q.x-p.x,dy=q.y-p.y,len=Math.max(1,Math.hypot(dx,dy));
+      const blocked=this.players.some(e=>{
+        if(e.team===p.team)return false;
+        const t=((e.x-p.x)*dx+(e.y-p.y)*dy)/(len*len);
+        return t>.05&&t<.95&&Math.hypot(p.x+t*dx-e.x,p.y+t*dy-e.y)<35;
+      });
+      return (nx||ny ? (dx*nx+dy*ny)/len*1200 : 0) - (blocked?300:0) -len*.5 + dx*(p.team===0?1:-1)*.18;
+    };
+    return this.players.filter(q=>q.team===p.team&&!q.keeper&&q.id!==p.id).sort((a,b)=>score(b)-score(a))[0];
+  }
+  pass(p: Player, input?: Input) {
     if (this.ball.owner !== p.id) return;
-    const target = this.players.filter(q => q.team === p.team && !q.keeper && q.id !== p.id)[0];
+    const target = this.passTarget(p,input);
     if (!target) return;
     const lead = Math.min(distance(p, target) / 460, .55);
     this.kick(p, target.x + target.vx * lead - p.x, target.y + target.vy * lead - p.y, clamp(distance(p, target) * .65 + 300, 360, 610));
@@ -99,6 +133,29 @@ export class Match {
     this.kick(p, 1, 0, 660);
     this.specialShot = { kind: 'homing', team: p.team, shooter: p.id, age: 0, bend: this.random() < .5 ? -1 : 1, waypoint: null, replan: 0 };
     this.charge = 0;
+  }
+  useSkill(p: Player, input: Input) {
+    if (!this.godMode || this.phase !== 'playing' || p.team !== 0 || p.id !== this.selected || this.ball.owner !== p.id) return;
+    if(this.selectedSkill === 'magical'){ this.selectingPass = true; this.charge = 0; return; }
+    const dx = input.x || input.y ? input.x : FIELD.right + 20 - p.x;
+    const dy = input.x || input.y ? input.y : FIELD.centerY - p.y;
+    this.kick(p, dx, dy, 1150);
+    // Start at the player's feet: sweep the entire launch path rather than skipping nearby opponents.
+    this.ball.x = p.x; this.ball.y = p.y;
+    this.specialShot = {kind:'dragon',team:p.team,shooter:p.id,age:0,bend:0,waypoint:null,replan:0};
+    this.charge = 0;
+  }
+  choosePassReceiver(id: number): boolean {
+    const p=this.owner, receiver=this.players[id];
+    if(!this.selectingPass || !p || !receiver || receiver.team!==p.team || receiver.keeper || receiver===p) return false;
+    const start={x:this.ball.x,y:this.ball.y}, dx=receiver.x-start.x,dy=receiver.y-start.y;
+    const length=Math.max(1,Math.hypot(dx,dy)), bow=clamp(length*.45,65,180);
+    const middle={x:(start.x+receiver.x)/2,y:(start.y+receiver.y)/2};
+    const candidates=[-1,1].map(side=>({x:clamp(middle.x-dy/length*bow*side,90,934),y:clamp(middle.y+dx/length*bow*side,90,590)}));
+    const control=candidates.sort((a,b)=>distance(b,middle)-distance(a,middle))[0];
+    this.kick(p,dx,dy,600);this.ball.x=start.x;this.ball.y=start.y;
+    this.specialShot={kind:'magical',team:p.team,shooter:p.id,age:0,bend:0,waypoint:null,replan:0,flight:{receiver:id,start,control,duration:clamp(length/520,.5,1.6)}};
+    this.selectingPass=false;return true;
   }
   tackle(p: Player) {
     if (!this.godMode || this.phase !== 'playing' || p.team !== 0 || p.id !== this.selected) return;
@@ -166,6 +223,14 @@ export class Match {
   private guideSpecial(dt: number) {
     const shot = this.specialShot;
     if (!shot) return;
+    if (shot.kind === 'magical' && shot.flight) {
+      shot.age+=dt;
+      const f=shot.flight, receiver=this.players[f.receiver],t=Math.min(1,shot.age/f.duration),u=1-t;
+      const x=u*u*f.start.x+2*u*t*f.control.x+t*t*receiver.x;
+      const y=u*u*f.start.y+2*u*t*f.control.y+t*t*receiver.y;
+      this.ball.vx=(x-this.ball.x)/dt;this.ball.vy=(y-this.ball.y)/dt;return;
+    }
+    if (shot.kind === 'dragon') return;
     shot.age += dt;
     if (!this.godMode || this.ball.owner !== null || shot.age > 5) { this.specialShot = null; return; }
     shot.replan -= dt;
@@ -201,6 +266,31 @@ export class Match {
         if (Math.abs(tx - p.x) < 270 && Math.abs(p.y - 340) < 175) this.shoot(p);
         else if (near && this.ball.held > .65) this.pass(p);
       }
+    } else if (this.teamSize === 5) {
+      const teammates=this.players.filter(q=>q.team===p.team&&!q.keeper);
+      const chaser=[...teammates].sort((a,b)=>distance(a,this.ball)-distance(b,this.ball))[0];
+      const localBall=p.team===0?this.ball.x:1024-this.ball.x;
+      let localX=300;
+      if(attacking) {
+        localX=p.role==='defender'?clamp(localBall-155,200,580):p.role==='forward'?clamp(localBall+140,440,855):clamp(localBall+45,300,805);
+        ty=p.role==='upper'?175:p.role==='lower'?505:340;
+      } else if(chaser===p) {
+        localX=p.team===0?this.ball.x+this.ball.vx*.12:1024-(this.ball.x+this.ball.vx*.12);
+        ty=this.ball.y+this.ball.vy*.12;
+      } else {
+        localX=p.role==='defender'?clamp(localBall-170,160,380):p.role==='forward'?clamp(localBall-80,290,590):clamp(localBall-110,220,590);
+        ty=p.role==='upper'?235:p.role==='lower'?445:340;
+        if(owner && p.role!=='defender') {
+          const threats=this.players.filter(q=>q.team!==p.team&&!q.keeper&&q!==owner).sort((a,b)=>a.y-b.y);
+          const threat=p.role==='upper'?threats[0]:p.role==='lower'?threats.at(-1):undefined;
+          if(threat) { ty=clamp(threat.y,135,545); localX=clamp((p.team===0?threat.x:1024-threat.x)-45,200,600); }
+        }
+      }
+      tx=p.team===0?localX:1024-localX;
+      // Keep support players separated and let them make room for the human-controlled player.
+      if(chaser!==p || attacking) for(const q of teammates) if(q!==p&&distance(p,q)<85) {
+        const [sx,sy]=direction(p.x-q.x,p.y-q.y);tx+=sx*40;ty+=sy*40;
+      }
     } else if (attacking) {
       tx = clamp(owner!.x + dir * 115, 175, 849);
       ty = owner!.y < 340 ? 445 : 235;
@@ -214,7 +304,7 @@ export class Match {
   }
   step(dt: number, input: Input) {
     this.events = [];
-    if (this.phase === 'ready' || this.phase === 'ended') return;
+    if (this.selectingPass || this.phase === 'ready' || this.phase === 'ended') return;
     dt = clamp(dt, 0, 1 / 30);
     if (this.phase === 'goal') {
       this.goalWait -= dt;
@@ -223,15 +313,18 @@ export class Match {
     }
     this.elapsed += dt; this.remaining = Math.max(0, this.remaining - dt);
     if (this.remaining <= 0) { this.phase = 'ended'; this.specialShot = null; this.charge = 0; this.events.push({ type: 'end' }); return; }
-    if (input.switch) { this.selected = this.selected === 1 ? 2 : 1; this.charge = 0; }
+    if (input.switch) this.switchPlayer(input);
     const controlled = this.players[this.selected];
     if (input.charge && this.ball.owner === controlled.id) this.charge = Math.min(1, this.charge + dt / .85);
-    if (input.pass) this.pass(controlled);
+    if (input.pass) this.pass(controlled, input);
+    else if (input.skill) this.useSkill(controlled, input);
     else if (input.homing && this.godMode) this.specialKick(controlled);
     else if (input.tackle && this.godMode) this.tackle(controlled);
     else if (input.shoot) this.shoot(controlled, input);
+    if(this.selectingPass)return;
     if (this.ball.owner !== this.selected) this.charge = 0;
     for (const p of this.players) {
+      if(this.specialShot?.flight?.receiver === p.id){p.vx=0;p.vy=0;continue;}
       p.cooldown = Math.max(0, p.cooldown - dt);
       if (p.stagger > 0) {
         p.stagger = Math.max(0, p.stagger - dt);
@@ -282,11 +375,30 @@ export class Match {
         this.collectBall();
         if (this.ball.owner !== null) break;
       }
-      const drag = Math.exp(-.48 * dt); this.ball.vx *= drag; this.ball.vy *= drag;
+      const drag = this.specialShot && this.specialShot.kind !== 'homing' ? 1 : Math.exp(-.48 * dt); this.ball.vx *= drag; this.ball.vy *= drag;
     }
     if (this.bounds()) return;
   }
   private collectBall() {
+    if(this.specialShot?.kind === 'magical' && this.specialShot.flight) {
+      const receiver=this.players[this.specialShot.flight.receiver];
+      if(this.specialShot.age>=this.specialShot.flight.duration && distance(receiver,this.ball)<23){
+        this.ball.owner=receiver.id;this.ball.lock=.5;this.ball.held=0;this.ball.vx=0;this.ball.vy=0;
+        receiver.stagger=0;receiver.cooldown=0;this.selected=receiver.id;this.specialShot=null;return;
+      }
+    }
+    if (this.specialShot?.kind === 'dragon' || this.specialShot?.kind === 'magical') {
+      const shot = this.specialShot;
+      const [nx,ny] = direction(-this.ball.vy,this.ball.vx);
+      for (const p of this.players) {
+        if (p.team === shot.team || distance(p,this.ball) > (p.keeper ? 29 : 25)) continue;
+        const side = (p.x-this.ball.x)*nx+(p.y-this.ball.y)*ny >= 0 ? 1 : -1;
+        p.x = clamp(p.x+nx*side*34,87,937); p.y = clamp(p.y+ny*side*34,85,595);
+        p.vx = nx*side*290; p.vy = ny*side*290;
+        p.stagger = 1.2; p.cooldown = 1.45;
+      }
+      return;
+    }
     for (const p of [...this.players].sort((a, b) => distance(a, this.ball) - distance(b, this.ball))) {
       const speed = Math.hypot(this.ball.vx, this.ball.vy);
       if (p.cooldown > 0 || distance(p, this.ball) > (p.keeper ? 26 : 22)) continue;

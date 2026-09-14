@@ -35,12 +35,12 @@ Run `node xiangqi-test.js` for rules and AI checks, and `node test.js` for both 
 
 ## Soccer tab — The Neighborhood Cup
 
-Select **Soccer**, then **Kick off**. Play as Meadow (green), attacking right, against Terracotta. Each team has two outfield players and an automatic goalkeeper. Matches have two minutes of playing time; goal celebrations and pauses stop the clock. A level score at full time is a draw.
+Select **Soccer**, then **Kick off**. Play as Meadow (green), attacking right, against Terracotta. Choose two or four outfield players plus an automatic goalkeeper per team. Matches have two, four, or six minutes of playing time; goal celebrations and pauses stop the clock. A level score at full time is a draw.
 
 - **WASD / arrow keys:** move. Diagonal movement is normalized.
 - **Space:** pass ahead of your teammate and automatically select the receiver.
 - **Hold J, then release:** charge and shoot. Directional input aims the shot; without it, aim defaults toward the opposing goal. Charging slows your player.
-- **K:** switch between your two outfield players. A bright ring and arrow identify the selected player.
+- **K:** switch outfield players; hold a direction to prefer a teammate in that direction. A bright ring and arrow identify the selected player.
 - **Shift:** sprint. The energy meter drains while sprinting and recovers afterward. Sprinting pushes the ball farther ahead, making it easier to steal.
 - **Esc / Pause:** pause or resume. Leaving the Soccer tab, switching browser tabs, or losing window focus pauses the match. Return and choose **Back to the pitch** to resume.
 - Touch screens have directional and action buttons. Hold the on-screen Shoot button to charge, then release it.
@@ -76,3 +76,19 @@ Enable **God mode** in the soccer match panel to unlock two extra shots for your
 - **N — Guaranteed tackle:** press near an opponent (within 62 pitch units) to knock them off balance for 1.1 seconds. If they have the ball, it rolls away at speed and they cannot immediately recover it. Every in-range tackle succeeds, from any direction, including against the keeper. There is no chance roll or tackle cooldown. Out of range, N does nothing. If several opponents are in reach, the ball carrier takes priority.
 
 Touch controls include Homing H and Tackle N buttons, disabled until God mode is enabled. J remains the ordinary charged shot. N replaces the former curve shot and never works with God mode off. Turning God mode off cancels active homing steering; an already tackled player finishes recovering normally. The toggle survives new matches and tab switches within this page session. Goals and restarts reset stagger effects.
+
+### Team size and match length
+
+Choose **3v3** (one keeper and two outfield players) or **5v5** (one keeper, one defender, two wide midfielders, and one forward). Choose **2, 4, or 6 minutes** of playing time. These selectors apply when you next start a match; changing them does not alter an ongoing match. The match panel shows the active format. Goal celebrations, pauses, and tab switches do not consume playing time.
+
+Hold a direction and press **Space** to prefer a teammate in that direction; without a direction, passing favors nearby teammates with open lanes and forward progress. Control switches to the intended receiver. **K** selects the other outfield player closest to the ball; hold a direction to prefer a teammate in that direction. Keepers remain automatic. In 5v5, AI players spread into a diamond, cover passing lanes when defending, and send one player toward loose balls while supporting players keep their spacing. H homing shots and N guaranteed God mode tackles work with either team size.
+
+### Selected special skill — Dragon Shot
+
+With God mode enabled, the **Special skill** dropdown appears. Select **Dragon Shot**, then press **U** while your selected player has possession. WASD or arrows aim the shot; with no direction, it aims toward the opponent's goal. The on-screen **Skill U** button activates the same selection. H homing, N tackle, J charged shooting, and Space passing are unchanged.
+
+Dragon Shot has an orange glow and trail, travels faster than a fully charged regular shot, passes through teammates, and knocks opposing players (including keepers) sideways off balance. It cannot be intercepted and keeps full speed until it scores or hits the pitch boundary. A boundary rebound returns to normal ball physics. Disabling God mode prevents new activations but does not extinguish an already launched Dragon Shot. Pausing freezes flight; full time and new matches end it.
+
+### Magical Pass
+
+Select **Magical Pass** in the God mode skill dropdown and press **U** with possession. The match and clock freeze while numbered targets highlight your other outfield teammates. Click or tap a target to resume play and launch a purple, curved pass. Opponents in its path are knocked aside; teammates cannot intercept it. The receiver waits for delivery, then takes possession and becomes your controlled player. Esc does not cancel target selection. Goalkeepers and opposing players cannot be selected. Starting a new match resets selection and flight.
