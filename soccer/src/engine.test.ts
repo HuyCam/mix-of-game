@@ -198,3 +198,27 @@ test('Magical Pass follows a pronounced curve, knocks opponents away and deliver
  assert.ok(maxBend>40);assert.ok(hit);assert.equal(m.ball.owner,2);assert.equal(m.selected,2);assert.equal(m.specialShot,null);
  }
 });
+
+test('CR7 needs God mode but not possession, multiplies movement by 1.5, and refreshes',()=>{
+ const normal=new Match(),boost=new Match();normal.start();boost.start();normal.ball.owner=null;boost.ball.owner=null;
+ boost.selectedSkill='cr7';boost.useSkill(boost.players[1],idleInput());assert.equal(boost.cr7,null);
+ boost.setGodMode(true);boost.useSkill(boost.players[1],idleInput());
+ const start=normal.players[1].x;tick(normal,.2,{x:1});tick(boost,.2,{x:1});
+ assert.ok(Math.abs((boost.players[1].x-start)/(normal.players[1].x-start)-1.5)<.001);
+ boost.useSkill(boost.players[1],idleInput());assert.equal((boost as Match).cr7?.remaining,8);
+});
+test('CR7 knocks opponents including keepers back, releases their ball, and spares teammates',()=>{
+ for(const size of [3,5] as const)for(const id of [size,size+1]){
+ const m=new Match();m.start(size,120);m.setGodMode(true);m.selectedSkill='cr7';scatter(m);
+ const p=m.players[1],q=m.players[id];p.x=500;p.y=340;q.x=540;q.y=340;m.ball.owner=q.id;
+ m.useSkill(p,idleInput());m.step(1/120,{...idleInput(),x:1});
+ assert.ok(q.stagger>1);assert.ok(q.vx>300);assert.equal(m.ball.owner,null);assert.equal(m.players[2].stagger,0);
+ }
+});
+test('CR7 expires, stays on its activating player, and clears when disabled or restarted',()=>{
+ const m=new Match();m.start();m.setGodMode(true);m.selectedSkill='cr7';m.useSkill(m.players[1],idleInput());
+ m.switchPlayer(idleInput());assert.equal(m.cr7?.player,1);
+ tick(m,8.1);assert.equal(m.cr7,null);
+ m.useSkill(m.players[m.selected],idleInput());assert.ok(m.cr7);m.setGodMode(false);assert.equal(m.cr7,null);
+ m.setGodMode(true);m.useSkill(m.players[m.selected],idleInput());m.start();assert.equal(m.cr7,null);
+});

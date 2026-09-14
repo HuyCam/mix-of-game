@@ -38,16 +38,18 @@ export class Match {
   elapsed = 0;
   difficulty: Difficulty = 'medium';
   godMode = false;
-  selectedSkill: 'dragon' | 'magical' = 'dragon';
+  selectedSkill: 'dragon' | 'magical' | 'cr7' = 'dragon';
+  cr7: {player:number;remaining:number} | null = null;
   selectingPass = false;
   specialShot: SpecialShot | null = null;
-  setGodMode(enabled: boolean) { this.godMode = enabled; if (!enabled && this.specialShot?.kind === 'homing') this.specialShot = null; }
+  setGodMode(enabled: boolean) { this.godMode = enabled; if(!enabled)this.cr7=null; if (!enabled && this.specialShot?.kind === 'homing') this.specialShot = null; }
   private seed = 71429;
 
   constructor() { this.resetPositions(0); }
   private random() { this.seed = (Math.imul(this.seed, 1664525) + 1013904223) >>> 0; return this.seed / 4294967296; }
   start(teamSize: 3 | 5 = this.teamSize, duration: 120 | 240 | 360 = this.duration) { this.teamSize = teamSize; this.duration = duration; this.score = [0, 0]; this.remaining = duration; this.elapsed = 0; this.phase = 'playing'; this.events = []; this.resetPositions(0); }
   resetPositions(team: Team) {
+    this.cr7=null;
     this.selectingPass = false;
     this.specialShot = null;
     this.kickoffTeam = team;
@@ -135,7 +137,9 @@ export class Match {
     this.charge = 0;
   }
   useSkill(p: Player, input: Input) {
-    if (!this.godMode || this.phase !== 'playing' || p.team !== 0 || p.id !== this.selected || this.ball.owner !== p.id) return;
+    if (!this.godMode || this.phase !== 'playing' || this.selectingPass || p.team !== 0 || p.id !== this.selected) return;
+    if(this.selectedSkill === 'cr7'){this.cr7={player:p.id,remaining:8};return;}
+    if(this.ball.owner !== p.id)return;
     if(this.selectedSkill === 'magical'){ this.selectingPass = true; this.charge = 0; return; }
     const dx = input.x || input.y ? input.x : FIELD.right + 20 - p.x;
     const dy = input.x || input.y ? input.y : FIELD.centerY - p.y;
@@ -240,6 +244,7 @@ export class Match {
   }
   private steer(p: Player, dx: number, dy: number, speed: number, dt: number) {
     const [nx, ny] = direction(dx, dy);
+    if(this.cr7?.player===p.id)speed*=1.5;
     const blend = 1 - Math.exp(-12 * dt);
     p.vx += (nx * speed - p.vx) * blend; p.vy += (ny * speed - p.vy) * blend;
     if (Math.hypot(nx, ny) > .1) { p.faceX = nx; p.faceY = ny; }
@@ -311,8 +316,9 @@ export class Match {
       if (this.goalWait <= 0) { this.resetPositions(this.kickoffTeam); this.phase = 'playing'; }
       return;
     }
+    if(this.cr7){this.cr7.remaining=Math.max(0,this.cr7.remaining-dt);if(this.cr7.remaining===0)this.cr7=null;}
     this.elapsed += dt; this.remaining = Math.max(0, this.remaining - dt);
-    if (this.remaining <= 0) { this.phase = 'ended'; this.specialShot = null; this.charge = 0; this.events.push({ type: 'end' }); return; }
+    if (this.remaining <= 0) { this.phase = 'ended'; this.cr7=null; this.specialShot = null; this.charge = 0; this.events.push({ type: 'end' }); return; }
     if (input.switch) this.switchPlayer(input);
     const controlled = this.players[this.selected];
     if (input.charge && this.ball.owner === controlled.id) this.charge = Math.min(1, this.charge + dt / .85);
@@ -338,6 +344,20 @@ export class Match {
         p.stamina = clamp(p.stamina + (sprint ? -.27 : .18) * dt, 0, 1);
         this.steer(p, input.x, input.y, (sprint ? 274 : 190) * (this.charge > 0 ? .67 : 1), dt);
       } else { p.stamina = Math.min(1, p.stamina + dt * .18); this.ai(p, dt); }
+    }
+    if(this.cr7){
+      const runner=this.players[this.cr7.player];
+      for(const opponent of this.players){
+        if(opponent.team===runner.team || distance(runner,opponent)>46)continue;
+        let [nx,ny]=direction(opponent.x-runner.x,opponent.y-runner.y);
+        if(!nx&&!ny)[nx,ny]=[runner.faceX||1,runner.faceY];
+        opponent.x=clamp(runner.x+nx*57,87,937);opponent.y=clamp(runner.y+ny*57,85,595);
+        opponent.vx=nx*330;opponent.vy=ny*330;opponent.stagger=1.1;opponent.cooldown=1.35;
+        if(this.ball.owner===opponent.id){
+          this.specialShot=null;this.ball.owner=null;this.ball.held=0;this.ball.lock=.25;
+          this.ball.x=opponent.x;this.ball.y=opponent.y;this.ball.vx=nx*460;this.ball.vy=ny*460;
+        }
+      }
     }
     // Resolve player overlap, including keepers, without imparting explosive velocities.
     for (let i = 0; i < this.players.length; i++) for (let j = i + 1; j < this.players.length; j++) {
@@ -426,7 +446,7 @@ export class Match {
       const scoring: Team = b.x > 512 ? 0 : 1;
       this.score[scoring]++; this.kickoffTeam = scoring === 0 ? 1 : 0;
       this.specialShot = null;
-      this.phase = 'goal'; this.goalWait = 2.3; this.charge = 0;
+      this.cr7=null;this.phase = 'goal'; this.goalWait = 2.3; this.charge = 0;
       this.ball.owner = null; this.ball.vx = 0; this.ball.vy = 0;
       this.events.push({ type: 'goal', team: scoring }); return true;
     }

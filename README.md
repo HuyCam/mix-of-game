@@ -111,3 +111,7 @@ Dragon Shot has an orange glow and trail, travels faster than a fully charged re
 ### Magical Pass
 
 Select **Magical Pass** in the God mode skill dropdown and press **U** with possession. The match and clock freeze while numbered targets highlight your other outfield teammates. Click or tap a target to resume play and launch a purple, curved pass. Opponents in its path are knocked aside; teammates cannot intercept it. The receiver waits for delivery, then takes possession and becomes your controlled player. Esc does not cancel target selection. Goalkeepers and opposing players cannot be selected. Starting a new match resets selection and flight.
+
+### CR7
+
+With God mode on, select **CR7** and press **U**, with or without possession. Your selected player gains a golden aura for **8 seconds**, **1.5× movement speed** (including sprint), and automatic contact knockback against opponents, including the goalkeeper. Contact knocks their ball loose; teammates are unaffected. A countdown appears below the pitch. U refreshes the duration instead of stacking speed. The aura stays with the activating player when you switch control. Pauses freeze its timer; expiry, disabling God mode, goals, full time, and new matches clear it.

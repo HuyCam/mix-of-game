@@ -132,6 +132,12 @@ class PitchScene extends Phaser.Scene {
     g.fillStyle(0xe0f69e); g.fillTriangle(selected.x - 5, selected.y - 35, selected.x + 5, selected.y - 35, selected.x, selected.y - 28);
     // Render players in pitch-depth order; each body is built from flat polygon facets.
     for (const p of [...match.players].sort((a, b) => a.y - b.y)) {
+      if(match.cr7?.player===p.id){
+        const pulse=reducedMotion?1:1+Math.sin(match.elapsed*8)*.08;
+        g.fillStyle(0xffdc62,.12);g.fillCircle(p.x,p.y,37*pulse);
+        g.lineStyle(2.5,0xffdb66,.85);g.strokeEllipse(p.x,p.y+5,65*pulse,46*pulse);
+        g.lineStyle(1,0xfff3b4,.65);g.strokeCircle(p.x,p.y,31*pulse);
+      }
       if (p.stagger > 0) {
         g.lineStyle(2, 0xf5c779, .9); g.strokeEllipse(p.x, p.y - 30, 30, 10);
         for (let i = 0; i < 3; i++) { const angle = match.elapsed * 7 + i * Math.PI * 2 / 3; g.fillStyle(0xffe1a0); g.fillCircle(p.x + Math.cos(angle) * 15, p.y - 30 + Math.sin(angle) * 5, 2.5); }
@@ -203,7 +209,7 @@ function updateHud() {
   $('soccer-clock').classList.toggle('urgent', seconds <= 20);
   $('soccer-stamina').style.width = `${match.players[match.selected].stamina * 100}%`;
   $('soccer-player').textContent = `NO. ${String(match.players[match.selected].number).padStart(2,'0')}`;
-  $('soccer-possession').textContent = match.specialShot ? match.specialShot.kind === 'magical' ? 'MAGICAL PASS' : match.specialShot.kind === 'dragon' ? 'DRAGON SHOT' : 'HOMING SHOT' : match.owner ? match.owner.team === 0 ? 'YOUR BALL' : 'THEIR BALL' : 'LOOSE BALL';
+  $('soccer-possession').textContent = match.cr7 ? `CR7 · ${Math.ceil(match.cr7.remaining)}s` : match.specialShot ? match.specialShot.kind === 'magical' ? 'MAGICAL PASS' : match.specialShot.kind === 'dragon' ? 'DRAGON SHOT' : 'HOMING SHOT' : match.owner ? match.owner.team === 0 ? 'YOUR BALL' : 'THEIR BALL' : 'LOOSE BALL';
   $('soccer-pause').textContent = paused ? 'Resume' : 'Pause';
   ($('soccer-pause') as HTMLButtonElement).disabled = match.selectingPass || !started || match.phase === 'ended';
   const overlay = $('soccer-overlay');
@@ -237,7 +243,7 @@ $('soccer-god-mode').onclick = () => {
   updateHud();
   if (started && !paused) $('soccer-stage').focus({ preventScroll: true });
 };
-$('soccer-skill').onchange = () => { match.selectedSkill = ($('soccer-skill') as HTMLSelectElement).value as 'dragon' | 'magical'; };
+$('soccer-skill').onchange = () => { match.selectedSkill = ($('soccer-skill') as HTMLSelectElement).value as 'dragon' | 'magical' | 'cr7'; };
 $('soccer-level').onchange = () => { match.difficulty = ($('soccer-level') as HTMLSelectElement).value as Match['difficulty']; };
 $('soccer-sound').onclick = () => {
   muted = !muted; $('soccer-sound').textContent = muted ? 'Sound off' : 'Sound on'; $('soccer-sound').setAttribute('aria-pressed', String(!muted));
