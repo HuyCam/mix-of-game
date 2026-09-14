@@ -68,6 +68,25 @@ npm test
 
 The soccer tests cover movement, sprint energy, passes, shot power, stealing, goal-line rules, board rebounds, goalkeeper collisions and distribution, full-time freezing, and complete simulated matches on all difficulties. The root `node test.js` suite also checks navigation and preservation of pending board-game turns. Phaser's MIT license is included in `soccer/PHASER-LICENSE.txt`.
 
+### Run the server in a detached tmux session
+
+With tmux installed and dependencies installed using `npm ci`, run these commands from the project's `soccer` folder:
+
+```sh
+tmux new -s myapp
+npm run dev -- --host 0.0.0.0
+```
+
+The server listens on all network interfaces. Use the URL and port printed by Vite to access the game collection.
+
+Detach with **Ctrl+B**, then **D**. The server keeps running inside tmux. Reattach anytime with:
+
+```sh
+tmux attach -t myapp
+```
+
+To stop the server, reattach and press **Ctrl+C**.
+
 ### Soccer God mode
 
 Enable **God mode** in the soccer match panel to unlock two extra shots for your selected player while they have possession:
