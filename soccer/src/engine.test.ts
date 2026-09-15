@@ -224,11 +224,11 @@ test('CR7 expires, stays on its activating player, and clears when disabled or r
 });
 
 test('new skills respect God mode and shot possession gates', () => {
- for(const skill of ['meteor','timefreeze','phantom','colossus','mirror'] as const){
+ for(const skill of ['meteor','timefreeze','phantom','colossus','mirror','divine'] as const){
   const m=new Match();m.start();m.selectedSkill=skill;const x=m.players[1].x;
-  m.useSkill(m.players[1],idleInput());assert.equal(m.specialShot,null);assert.equal(m.timeFreeze,null);assert.equal(m.colossus,null);assert.equal(m.players[1].x,x);
+  m.useSkill(m.players[1],idleInput());assert.equal(m.specialShot,null);assert.equal(m.timeFreeze,null);assert.equal(m.colossus,null);assert.equal(m.divine,null);assert.equal(m.players[1].x,x);
   m.setGodMode(true);m.ball.owner=null;m.useSkill(m.players[1],idleInput());
-  if(skill==='meteor'||skill==='mirror')assert.equal(m.specialShot,null);
+  if(skill==='meteor'||skill==='mirror'||skill==='divine')assert.equal(m.specialShot,null);
   else assert.ok(m.timeFreeze||m.colossus||m.lastDash);
  }
 });
@@ -288,4 +288,66 @@ test('Colossus expires after five seconds and full time clears all new effects',
  const m=new Match();m.start();scatter(m);m.setGodMode(true);m.ball.owner=null;m.ball.x=512;m.ball.y=500;m.selectedSkill='colossus';m.useSkill(m.players[1],idleInput());tick(m,5);assert.equal(m.colossus,null);
  for(const skill of ['colossus','timefreeze','phantom'] as const){m.selectedSkill=skill;m.useSkill(m.players[m.selected],idleInput());}
  m.remaining=.001;tick(m,1/120);assert.equal(m.phase,'ended');assert.equal(m.timeFreeze,null);assert.equal(m.colossus,null);assert.equal(m.lastDash,null);assert.equal(m.phantomCooldown,0);
+});
+
+test('Divine Attack needs an opponent within 120 units and does nothing when out of range',()=>{
+ const miss=new Match();miss.start();scatter(miss);miss.setGodMode(true);miss.selectedSkill='divine';
+ const far=miss.players[1];far.x=200;far.y=340;miss.ball.owner=far.id;
+ for(const q of miss.players.filter(q=>q.team===1)){q.x=900;q.y=340;}
+ miss.useSkill(far,idleInput());assert.equal(miss.specialShot,null);assert.equal(miss.ball.owner,far.id);assert.ok(!miss.divine);
+
+ const m=new Match();m.start();scatter(m);m.setGodMode(true);m.selectedSkill='divine';
+ const p=m.players[1];p.x=200;p.y=340;m.players[4].x=280;m.players[4].y=340;m.ball.owner=p.id;
+ m.useSkill(p,idleInput());
+ assert.ok(m.divine);assert.equal(m.divine.target,4);assert.equal(m.specialShot?.kind,'divine');assert.equal(m.ball.owner,null);
+});
+
+test('Divine Attack freezes everyone except shooter and target, volleys three times, then stuns',()=>{
+ const m=new Match();m.start();scatter(m);m.setGodMode(true);m.selectedSkill='divine';
+ const p=m.players[1], target=m.players[4], ally=m.players[2], other=m.players[3];
+ p.x=400;p.y=340;target.x=480;target.y=340;ally.x=250;ally.y=200;other.x=700;other.y=500;
+ m.ball.owner=p.id;m.useSkill(p,idleInput());
+ assert.equal(m.divine?.hits,0);assert.equal(m.divine?.phase,'outbound');
+ const allyPos=[ally.x,ally.y], otherPos=[other.x,other.y], clock=m.remaining;
+ tick(m,.05,{x:1});
+ assert.deepEqual([ally.x,ally.y],allyPos);assert.deepEqual([other.x,other.y],otherPos);
+ assert.ok(m.remaining<clock);assert.ok(p.x>400);
+ // Drive the three hit cycle to completion.
+ for(let guard=0;guard<900&&m.divine;guard++)m.step(1/120,idleInput());
+ assert.equal(m.divine,null);assert.equal(m.specialShot,null);
+ assert.ok(Math.hypot(target.x-480,target.y-340)>=149,'at least three forced 50-unit knockbacks');
+ assert.ok(target.stagger>=4.9);assert.equal(m.ball.owner,p.id);
+ assert.notEqual(m.ball.owner,target.id);
+});
+
+test('Divine Attack return trips are half outbound speed and the final return restores possession',()=>{
+ const m=new Match();m.start();scatter(m);m.setGodMode(true);m.selectedSkill='divine';
+ const p=m.players[1], target=m.players[4];p.x=400;p.y=340;target.x=480;target.y=340;m.ball.owner=p.id;
+ m.useSkill(p,idleInput());
+ // Reach the first return phase and confirm half-speed flight toward the shooter.
+ for(let i=0;i<120&&m.divine?.phase!=='return';i++)m.step(1/120,idleInput());
+ assert.equal(m.divine?.phase,'return');assert.equal(m.divine?.hits,1);
+ assert.ok(Math.abs(Math.hypot(m.ball.vx,m.ball.vy)-410)<1);
+ for(let guard=0;guard<900&&m.divine;guard++)m.step(1/120,idleInput());
+ assert.equal(m.divine,null);assert.equal(m.ball.owner,p.id);assert.ok(target.stagger>=4.9);
+});
+
+test('Divine Attack target cannot catch the ball mid-sequence and God mode off cancels it',()=>{
+ const m=new Match();m.start();scatter(m);m.setGodMode(true);m.selectedSkill='divine';
+ const p=m.players[1], target=m.players[4];p.x=400;p.y=340;target.x=460;target.y=340;target.cooldown=0;
+ m.ball.owner=p.id;m.useSkill(p,idleInput());
+ tick(m,.08);assert.ok(m.divine);assert.notEqual(m.ball.owner,target.id);
+ m.setGodMode(false);assert.equal(m.divine,null);assert.equal(m.specialShot,null);
+});
+
+test('Divine Attack clears on goal, full time, and new match',()=>{
+ const m=new Match();m.start();scatter(m);m.setGodMode(true);m.selectedSkill='divine';
+ const p=m.players[1];p.x=400;p.y=340;m.players[4].x=470;m.players[4].y=340;m.ball.owner=p.id;
+ m.useSkill(p,idleInput());assert.ok(m.divine);
+ // Place the ball over the line without divine re-aim pulling it back onto the pitch.
+ m.specialShot=null;m.ball={x:FIELD.right+8,y:340,vx:0,vy:0,owner:null,lock:0,held:0};m.step(1/120,idleInput());
+ assert.equal(m.phase,'goal');assert.equal(m.divine,null);
+ m.start();m.setGodMode(true);m.selectedSkill='divine';scatter(m);p.x=400;p.y=340;m.players[4].x=470;m.players[4].y=340;m.ball.owner=1;
+ m.useSkill(m.players[1],idleInput());m.remaining=.001;tick(m,1/120);
+ assert.equal(m.phase,'ended');assert.equal(m.divine,null);
 });

@@ -2,7 +2,7 @@ export const FIELD = { left: 72, right: 952, top: 70, bottom: 610, centerX: 512,
 export const BALL_RADIUS = 7;
 export type Team = 0 | 1;
 export type Phase = 'ready' | 'playing' | 'goal' | 'ended';
-export type Skill = 'dragon' | 'magical' | 'cr7' | 'meteor' | 'timefreeze' | 'phantom' | 'colossus' | 'mirror';
+export type Skill = 'dragon' | 'magical' | 'cr7' | 'meteor' | 'timefreeze' | 'phantom' | 'colossus' | 'mirror' | 'divine';
 export type Difficulty = 'easy' | 'medium' | 'hard';
 export interface Input { x: number; y: number; sprint: boolean; charge: boolean; pass: boolean; shoot: boolean; switch: boolean; homing: boolean; tackle: boolean; skill: boolean }
 export const idleInput = (): Input => ({ x: 0, y: 0, sprint: false, charge: false, pass: false, shoot: false, switch: false, homing: false, tackle: false, skill: false });
@@ -12,9 +12,12 @@ export interface Player {
 }
 export interface Ball { x: number; y: number; vx: number; vy: number; owner: number | null; lock: number; held: number }
 export interface SpecialShot {
-  kind: 'homing' | 'dragon' | 'magical' | 'meteor' | 'mirror';
+  kind: 'homing' | 'dragon' | 'magical' | 'meteor' | 'mirror' | 'divine';
   flight?: {receiver:number; start:{x:number;y:number}; control:{x:number;y:number}; duration:number}; team: Team; shooter: number; age: number;
   bend: number; waypoint: { x: number; y: number } | null; replan: number;
+}
+export interface DivineAttack {
+  shooter: number; target: number; hits: number; phase: 'outbound' | 'return'; ringAge: number;
 }
 export interface GameEvent { type: 'explosion' | 'kick' | 'steal' | 'save' | 'tackle' | 'goal' | 'end'; team?: Team }
 const clamp = (n: number, a: number, b: number) => Math.max(a, Math.min(b, n));
@@ -47,9 +50,14 @@ export class Match {
   lastDash: {from:{x:number;y:number};to:{x:number;y:number};player:number;age:number} | null = null;
   meteorFlash: {x:number;y:number;age:number;radius:number} | null = null;
   mirror: {ghosts:{x:number;y:number;vx:number;vy:number}[];guess:number;age:number} | null = null;
+  divine: DivineAttack | null = null;
   selectingPass = false;
   specialShot: SpecialShot | null = null;
-  setGodMode(enabled: boolean) { this.godMode = enabled; if(!enabled){this.cr7=null;this.timeFreeze=null;this.colossus=null;} if (!enabled && this.specialShot?.kind === 'homing') this.specialShot = null; }
+  setGodMode(enabled: boolean) {
+    this.godMode = enabled;
+    if(!enabled){this.cr7=null;this.timeFreeze=null;this.colossus=null;this.endDivine();}
+    if (!enabled && this.specialShot?.kind === 'homing') this.specialShot = null;
+  }
   private seed = 71429;
 
   constructor() { this.resetPositions(0); }
@@ -75,7 +83,7 @@ export class Match {
   get owner() { return this.ball.owner === null ? null : this.players[this.ball.owner]; }
   cancelCharge() { this.charge = 0; }
   private kick(p: Player, dx: number, dy: number, power: number) {
-    this.specialShot = null;this.mirror=null;
+    if(!this.divine){this.specialShot = null;this.mirror=null;}
     const [nx, ny] = direction(dx, dy);
     this.ball.owner = null; this.ball.held = 0; this.ball.lock = .13;
     this.ball.x = p.x + nx * 23; this.ball.y = p.y + ny * 23;
@@ -144,10 +152,47 @@ export class Match {
     this.specialShot = { kind: 'homing', team: p.team, shooter: p.id, age: 0, bend: this.random() < .5 ? -1 : 1, waypoint: null, replan: 0 };
     this.charge = 0;
   }
-  isFrozen(p: Player) { return this.timeFreeze !== null && p.team === 1; }
+  isFrozen(p: Player) {
+    if (this.timeFreeze !== null && p.team === 1) return true;
+    // Divine Attack freezes everyone except the shooter and the locked target.
+    if (this.divine && p.id !== this.divine.shooter && p.id !== this.divine.target) return true;
+    return false;
+  }
   isColossus(p: Player) { return this.colossus?.player === p.id; }
   private clearNewEffects() {
-    this.timeFreeze=null;this.colossus=null;this.phantomCooldown=0;this.lastDash=null;this.meteorFlash=null;this.mirror=null;
+    this.timeFreeze=null;this.colossus=null;this.phantomCooldown=0;this.lastDash=null;this.meteorFlash=null;this.mirror=null;this.divine=null;
+  }
+  private endDivine() {
+    if (!this.divine) return;
+    this.divine = null;
+    if (this.specialShot?.kind === 'divine') this.specialShot = null;
+  }
+  private fireDivine(shooter: Player, target: Player) {
+    this.kick(shooter, target.x - shooter.x, target.y - shooter.y, 820);
+    this.specialShot = { kind: 'divine', team: shooter.team, shooter: shooter.id, age: 0, bend: 0, waypoint: null, replan: 0 };
+    if (this.divine) this.divine.phase = 'outbound';
+  }
+  /** Return trips travel at half the outbound volley speed. */
+  private divineReturnSpeed() { return 410; }
+  private divineHit() {
+    const attack = this.divine;
+    if (!attack || attack.phase !== 'outbound') return;
+    const shooter = this.players[attack.shooter], target = this.players[attack.target];
+    const [nx, ny] = direction(target.x - shooter.x || this.ball.vx, target.y - shooter.y || this.ball.vy);
+    // Spec: force a 50-unit knockback each hit; ignore Colossus/freeze immunity for the locked target.
+    target.x = clamp(target.x + nx * 50, 87, 937);
+    target.y = clamp(target.y + ny * 50, 85, 595);
+    target.vx = nx * 220; target.vy = ny * 220;
+    attack.hits += 1;
+    this.events.push({ type: 'tackle', team: shooter.team });
+    if (attack.hits >= 3) {
+      target.stagger = 5; target.cooldown = 5;
+    }
+    // Every hit — including the last — sends the ball back to the shooter at half speed.
+    attack.phase = 'return';
+    const [rx, ry] = direction(shooter.x - this.ball.x, shooter.y - this.ball.y);
+    const speed = this.divineReturnSpeed();
+    this.ball.vx = rx * speed; this.ball.vy = ry * speed;
   }
   /** All skill knockback goes through this gate so frozen and Colossus players stay immovable. */
   knockback(p: Player, nx: number, ny: number, speed=330, shift=34): boolean {
@@ -172,7 +217,7 @@ export class Match {
     return this.ball;
   }
   useSkill(p: Player, input: Input) {
-    if (!this.godMode || this.phase !== 'playing' || this.selectingPass || p.team !== 0 || p.id !== this.selected) return;
+    if (!this.godMode || this.phase !== 'playing' || this.selectingPass || this.divine || p.team !== 0 || p.id !== this.selected) return;
     if(this.selectedSkill === 'cr7'){this.cr7={player:p.id,remaining:8};return;}
     if(this.selectedSkill === 'timefreeze'){
       this.timeFreeze={remaining:2};
@@ -191,6 +236,18 @@ export class Match {
     }
     if(this.ball.owner !== p.id)return;
     if(this.selectedSkill === 'magical'){ this.selectingPass = true; this.charge = 0; return; }
+    if(this.selectedSkill === 'divine'){
+      const target = this.players
+        .filter(q => q.team !== p.team && distance(p, q) <= 120)
+        .sort((a, b) => distance(p, a) - distance(p, b))[0];
+      // Spec: no opponent in the 120-unit radius means the skill does nothing.
+      if (!target) return;
+      for (const q of this.players) if (q.id !== p.id && q.id !== target.id) { q.vx = 0; q.vy = 0; }
+      this.divine = { shooter: p.id, target: target.id, hits: 0, phase: 'outbound', ringAge: 0 };
+      this.charge = 0;
+      this.fireDivine(p, target);
+      return;
+    }
     const dx = input.x || input.y ? input.x : FIELD.right + 20 - p.x;
     const dy = input.x || input.y ? input.y : FIELD.centerY - p.y;
     if(this.selectedSkill==='mirror'){
@@ -292,6 +349,14 @@ export class Match {
       this.ball.vx=(x-this.ball.x)/dt;this.ball.vy=(y-this.ball.y)/dt;return;
     }
     if (shot.kind === 'dragon' || shot.kind === 'meteor') return;
+    if (shot.kind === 'divine' && this.divine) {
+      const attack = this.divine;
+      const aim = attack.phase === 'outbound' ? this.players[attack.target] : this.players[attack.shooter];
+      const [nx, ny] = direction(aim.x - this.ball.x, aim.y - this.ball.y);
+      const speed = attack.phase === 'outbound' ? 820 : this.divineReturnSpeed();
+      this.ball.vx = nx * speed; this.ball.vy = ny * speed;
+      return;
+    }
     if(shot.kind==='mirror'){shot.age+=dt;if(shot.age>=1.4){this.specialShot=null;this.mirror=null;}return;}
     shot.age += dt;
     if (!this.godMode || this.ball.owner !== null || shot.age > 5) { this.specialShot = null; return; }
@@ -381,22 +446,32 @@ export class Match {
     if(this.lastDash){this.lastDash.age+=dt;if(this.lastDash.age>=.45)this.lastDash=null;}
     if(this.meteorFlash){this.meteorFlash.age+=dt;if(this.meteorFlash.age>=.45)this.meteorFlash=null;}
     if(this.cr7){this.cr7.remaining=Math.max(0,this.cr7.remaining-dt);if(this.cr7.remaining===0)this.cr7=null;}
+    if(this.divine){this.divine.ringAge+=dt;}
     this.elapsed += dt; this.remaining = Math.max(0, this.remaining - dt);
     if (this.remaining <= 0) { this.phase = 'ended'; this.clearNewEffects(); this.cr7=null; this.specialShot = null; this.charge = 0; this.events.push({ type: 'end' }); return; }
-    if (input.switch) this.switchPlayer(input);
-    const controlled = this.players[this.selected];
-    if (input.charge && this.ball.owner === controlled.id) this.charge = Math.min(1, this.charge + dt / .85);
-    if (input.pass) this.pass(controlled, input);
-    else if (input.skill) this.useSkill(controlled, input);
-    else if (input.homing && this.godMode) this.specialKick(controlled);
-    else if (input.tackle && this.godMode) this.tackle(controlled);
-    else if (input.shoot) this.shoot(controlled, input);
+    // During Divine Attack the volley sequence owns the ball; ignore other skill/kick input.
+    if (!this.divine) {
+      if (input.switch) this.switchPlayer(input);
+      const controlled = this.players[this.selected];
+      if (input.charge && this.ball.owner === controlled.id) this.charge = Math.min(1, this.charge + dt / .85);
+      if (input.pass) this.pass(controlled, input);
+      else if (input.skill) this.useSkill(controlled, input);
+      else if (input.homing && this.godMode) this.specialKick(controlled);
+      else if (input.tackle && this.godMode) this.tackle(controlled);
+      else if (input.shoot) this.shoot(controlled, input);
+    }
     if(this.selectingPass)return;
     if (this.ball.owner !== this.selected) this.charge = 0;
     for (const p of this.players) {
       if(this.isFrozen(p)){p.vx=0;p.vy=0;continue;}
       if(this.isColossus(p))p.stagger=0;
       if(this.specialShot?.flight?.receiver === p.id){p.vx=0;p.vy=0;continue;}
+      // Locked Divine target may only slide from forced knockbacks — no AI counter-play.
+      if(this.divine && p.id === this.divine.target){
+        p.x = clamp(p.x + p.vx * dt, 87, 937); p.y = clamp(p.y + p.vy * dt, 85, 595);
+        p.vx *= Math.exp(-7 * dt); p.vy *= Math.exp(-7 * dt);
+        continue;
+      }
       p.cooldown = Math.max(0, p.cooldown - dt);
       if (p.stagger > 0) {
         p.stagger = Math.max(0, p.stagger - dt);
@@ -478,6 +553,27 @@ export class Match {
     if (this.bounds()) return;
   }
   private collectBall() {
+    if (this.divine && this.specialShot?.kind === 'divine') {
+      const attack = this.divine;
+      const shooter = this.players[attack.shooter], target = this.players[attack.target];
+      if (attack.phase === 'outbound' && distance(this.ball, target) <= (target.keeper ? 29 : 25)) {
+        this.divineHit();
+        return;
+      }
+      if (attack.phase === 'return' && distance(this.ball, shooter) <= 26) {
+        if (attack.hits >= 3) {
+          this.ball.owner = shooter.id; this.ball.lock = .45; this.ball.held = 0;
+          this.ball.vx = 0; this.ball.vy = 0; this.ball.x = shooter.x + shooter.faceX * 19; this.ball.y = shooter.y + shooter.faceY * 19;
+          this.selected = shooter.id;
+          this.endDivine();
+          return;
+        }
+        this.fireDivine(shooter, target);
+        return;
+      }
+      // Spec: nobody else — including the target — may take possession from these volleys.
+      return;
+    }
     if(this.specialShot?.kind === 'magical' && this.specialShot.flight) {
       const receiver=this.players[this.specialShot.flight.receiver];
       if(this.specialShot.age>=this.specialShot.flight.duration && distance(receiver,this.ball)<23){
@@ -530,6 +626,8 @@ export class Match {
     }
     if(this.specialShot?.kind==='meteor'&&(b.y<FIELD.top+r||b.y>FIELD.bottom-r||(!mouth&&(b.x<FIELD.left+r||b.x>FIELD.right-r))))this.meteorImpact();
     if(this.specialShot?.kind==='mirror'&&(b.y<FIELD.top+r||b.y>FIELD.bottom-r||(!mouth&&(b.x<FIELD.left+r||b.x>FIELD.right-r))))this.mirror=null;
+    // Divine volleys that leave the pitch end the sequence without a goal from the skill bounce.
+    if(this.divine&&(b.y<FIELD.top+r||b.y>FIELD.bottom-r||(!mouth&&(b.x<FIELD.left+r||b.x>FIELD.right-r))))this.endDivine();
     if (b.y < FIELD.top + r) { this.specialShot = null; b.y = FIELD.top + r; b.vy = Math.abs(b.vy) * .8; }
     if (b.y > FIELD.bottom - r) { this.specialShot = null; b.y = FIELD.bottom - r; b.vy = -Math.abs(b.vy) * .8; }
     if (!mouth) {
